@@ -187,6 +187,27 @@ KNOWLEDGE_BASE = {
             },
 }
 
+# Autenticazione con password semplice
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == os.getenv("DASHBOARD_PASSWORD"):
+            st.session_state["password_correct"] = True
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        st.title("🔐 Accesso alla Dashboard")
+        st.text_input("Inserisci la password", type="password", on_change=password_entered, key="password")
+        if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+            st.error("❌ Password errata")
+        st.stop()
+
+
+check_password()  # 👈 Blocca l'accesso se la password è errata
+
 
 def get_jira_instance():
     try:
