@@ -1,0 +1,6 @@
+streamlit
+python-dotenv
+google-generativeai
+requests
+atlassian-python-api
+pandas
