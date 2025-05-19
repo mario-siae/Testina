@@ -187,22 +187,10 @@ KNOWLEDGE_BASE = {
             },
 }
 
-def is_proxy_required(url="http://www.google.com", timeout=2):
-    try:
-        requests.get(url, timeout=timeout)
-        return False  # Connection successful, no proxy needed
-    except requests.exceptions.RequestException as e:
-        print(f"Connection test failed: {e}")
-        return True   # Connection failed, proxy might be needed
 
 def get_jira_instance():
     try:
         session = requests.Session()
-        if is_proxy_required():
-            session.proxies = {
-                'http': 'http://mazzacuv:GigiBuffon92!@10.255.1.243:8080',
-                'https': 'http://mazzacuv:GigiBuffon92!@10.255.1.243:8080'
-            }
         
         jira = Jira(
             url=JIRA_URL,
