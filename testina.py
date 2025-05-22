@@ -1296,8 +1296,14 @@ def main():
         st.error("Client Gemini non inizializzato. Controlla la chiave API e la configurazione.")
         return # Stop execution if client is not available
 
-
-
+    st.sidebar.markdown(
+        """
+        <div style="text-align: center; margin-bottom: 20px;">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/d/d4/Nuovo_logo_SIAE.png" width="150" style="pointer-events: none;">
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )    
 
     page_options = {
         "📝 Requisito Singolo": lambda: single_requirement_page_refactored(client_gemini, global_model_selection),
