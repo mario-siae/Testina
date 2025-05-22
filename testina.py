@@ -15,6 +15,7 @@ JIRA_URL = os.getenv("JIRA_URL")
 JIRA_USERNAME = os.getenv("JIRA_USERNAME")  
 JIRA_TOKEN = os.getenv("JIRA_TOKEN")  
 
+global_model_selection = ""
 
 wait_time = 60
 max_retries = 3
@@ -429,8 +430,8 @@ def _parse_markdown_table_to_df(md_table_string):
     return pd.DataFrame()
 
 
-# --- Agent Core Functions ( 그대로 유지, client 와 model 인자 추가 ) ---
-def run_valutatore_requisiti(requisito, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+# --- Agent Core Functions 
+def run_valutatore_requisiti(requisito, client_gemini, model=global_model_selection): # Updated model
     prompt = f"""
     Sei un esperto nella valutazione e miglioramento dei requisiti software. Il tuo compito è valutare se il requisito fornito contiene tutte le informazioni necessarie per evitare ambiguità e incomprensioni nello sviluppo.
     Valuta il requisito in base ai seguenti criteri minimi (basati sugli standard delle user story):
@@ -472,7 +473,7 @@ def run_valutatore_requisiti(requisito, client_gemini, model="gemini-1.5-flash-l
     response = model_instance.generate_content(prompt)
     return response.text
 
-def run_analista_requisiti(requisito, client_gemini, model="gemini-1.5-flash-latest", previous_analysis_feedback=None): # Updated model
+def run_analista_requisiti(requisito, client_gemini, model=global_model_selection, previous_analysis_feedback=None): # Updated model
     context = ""
     for system_id, system_info in KNOWLEDGE_BASE.items():
         if system_id.lower() in requisito.lower():
@@ -543,7 +544,7 @@ def run_analista_requisiti(requisito, client_gemini, model="gemini-1.5-flash-lat
             if attempt < max_retries - 1: time.sleep(wait_time)
             else: raise
 
-def run_analista_rischio(requisiti_analysis, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+def run_analista_rischio(requisiti_analysis, client_gemini, model=global_model_selection): # Updated model
     prompt = f"""
         **Ruolo:** Sei un Analista di Rischio esperto, incaricato di valutare i rischi associati ai casi d'uso identificati nell'analisi dei requisiti fornita.
         **Obiettivo:** Generare un'analisi dei rischi in formato tabellare, facilmente convertibile in una tabella Markdown.
@@ -580,7 +581,7 @@ def run_analista_rischio(requisiti_analysis, client_gemini, model="gemini-1.5-fl
             if attempt < max_retries - 1: time.sleep(wait_time)
             else: raise
 
-def run_generatore_test(requisiti_analysis, rischio_analysis, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+def run_generatore_test(requisiti_analysis, rischio_analysis, client_gemini, model=global_model_selection): # Updated model
     prompt = f"""
         Sei un Test Engineer esperto. Il tuo compito è generare test case completi basati sull'analisi dei requisiti e sull'analisi del rischio.
         Devi generare i test case in un formato strutturato che possa essere facilmente convertito in una tabella, seguendo ESATTAMENTE questo schema per ogni test case, inclusa la riga di separazione dell'header:
@@ -619,7 +620,7 @@ def run_generatore_test(requisiti_analysis, rischio_analysis, client_gemini, mod
             if attempt < max_retries - 1: time.sleep(wait_time)
             else: raise
 
-def run_analizzatore_automazione(test_cases, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+def run_analizzatore_automazione(test_cases, client_gemini, model=global_model_selection): # Updated model
     prompt = f"""
         Agisci come un Automation Engineer esperto con una forte mentalità orientata al ROI (Return on Investment). Il tuo compito è analizzare una serie di test case e determinare la loro idoneità all'automazione, considerando attentamente il bilanciamento tra il valore dell'automazione e l'effort necessario per implementarla in termini di tempo e risorse (costo). Suggerisci lo strumento più appropriato (Postman per test API o modifiche dati, Cypress per test end-to-end web, Appium per test end-to-end mobile) e assegna una priorità di automazione, concentrandoti sull'automazione di test **critici e fondamentali per la stabilità e la funzionalità in ambiente di produzione**.
         Identifica come casi da automatizzare solo quelli che in rapporto costi/benefici rappresentano un importante valore aggiunto tale da giustificare la spesa.
@@ -657,7 +658,7 @@ def run_analizzatore_automazione(test_cases, client_gemini, model="gemini-1.5-fl
             if attempt < max_retries - 1: time.sleep(wait_time)
             else: raise
 
-def run_analista_performance(requisiti_analysis, rischio_analysis, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+def run_analista_performance(requisiti_analysis, rischio_analysis, client_gemini, model=global_model_selection): # Updated model
     prompt = f"""
     Sei un Performance Test Engineer esperto. Analizza i requisiti e i rischi per determinare se sono necessari performance test.
     Rispondi in formato tabellare strutturato (usando | come separatore), seguendo ESATTAMENTE questo schema (USA QUESTO ESATTO HEADER):
@@ -695,7 +696,7 @@ def run_analista_performance(requisiti_analysis, rischio_analysis, client_gemini
     response = model_instance.generate_content(prompt)
     return response.text
 
-def run_analista_gestionale(test_cases, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+def run_analista_gestionale(test_cases, client_gemini, model=global_model_selection): # Updated model
     prompt = f"""
     Sei un Analista Gestionale esperto in QA IT con 10+ anni di esperienza nella stima degli effort di testing manuale.
     Il tuo compito è stimare l'effort necessario per eseguire manualmente i test case forniti, considerando una call Teams tra tester e business per la review e l'esecuzione.
