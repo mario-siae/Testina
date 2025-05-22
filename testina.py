@@ -707,7 +707,7 @@ def run_analista_gestionale(test_cases, client_gemini, model=global_model_select
         - Step Semplice (es. click, input testo semplice, verifica UI elementare): 2-3 minuti per step.
         - Step Medio (es. compilazione form con più campi, navigazione tra poche pagine, verifica dati semplice): 4-6 minuti per step.
         - Step Complesso (es. esecuzione di un flusso end-to-end breve, validazioni multiple, verifiche su DB/API di base, setup dati specifico): 7-10 minuti per step.
-    3. **Verifica Risultati e Documentazione**: 5-10 minuti per test case (confronto risultati attesi, cattura screenshot per fallimenti, log).
+    3. **Verifica Risultati e Documentazione**: 2-5 minuti per test case (confronto risultati attesi, cattura screenshot per fallimenti, log).
     4. **Contingency Buffer**: Aggiungi un 15-20% sul totale stimato per imprevisti, discussioni, chiarimenti durante la sessione.
     5. **Man Days**: Considera 1 Man Day = 7 ore effettive di lavoro. Arrotonda i Man Days al mezzo giorno più vicino (es. 0.5, 1, 1.5 MD).
 
