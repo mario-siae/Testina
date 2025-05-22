@@ -1072,7 +1072,7 @@ def jira_integration_page_refactored(client_gemini, global_model_selection):
     if not projects: return
 
     # Sidebar per selezione progetto e tipo issue
-    st.sidebar.title("Configurazione Jira")
+    st.sidebar.markdown("---")
     selected_project_key = st.sidebar.selectbox(
         "Seleziona Progetto Jira",
         options=list(projects.keys()),
@@ -1296,14 +1296,7 @@ def main():
         st.error("Client Gemini non inizializzato. Controlla la chiave API e la configurazione.")
         return # Stop execution if client is not available
 
-    # Selezione del modello globale nella Sidebar
-    st.sidebar.title("Configurazione Globale")
-    global_model_selection = st.sidebar.selectbox(
-        "Seleziona Modello Gemini (Globale):",
-        options=["gemini-2.0-flash-001", "gemini-1.5-flash-latest"], # Add more models
-        index=0, # Default to flash
-        key="global_model_selector"
-    )
+
 
 
     page_options = {
@@ -1313,9 +1306,16 @@ def main():
     }
         
     # Selezione modalità via Sidebar
-    st.sidebar.markdown("---")
     selected_page_name = st.sidebar.radio("Modalità Operativa:", list(page_options.keys()), label_visibility="visible")
+    st.sidebar.markdown("---")
 
+    # Selezione del modello globale nella Sidebar
+    global_model_selection = st.sidebar.selectbox(
+        "Seleziona Modello Gemini (Globale):",
+        options=["gemini-2.0-flash-001", "gemini-1.5-flash-latest"], # Add more models
+        index=0, # Default to flash
+        key="global_model_selector"
+    )
 
     # Mostra la pagina selezionata
     page_to_render_func = page_options[selected_page_name]
