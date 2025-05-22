@@ -1,11 +1,12 @@
 import os
 import streamlit as st
 from dotenv import load_dotenv
-from google import genai
+import google.generativeai as genai
 import pandas as pd
 import requests
 from atlassian import Jira
 import time
+import re # Importato per le espressioni regolari
 
 # Carica le variabili d'ambiente
 load_dotenv()
@@ -14,20 +15,19 @@ JIRA_URL = os.getenv("JIRA_URL")
 JIRA_USERNAME = os.getenv("JIRA_USERNAME")  
 JIRA_TOKEN = os.getenv("JIRA_TOKEN")  
 
+
 wait_time = 60
-max_retries = 3 
+max_retries = 3
 
 # Configurazione iniziale
 st.set_page_config(
     page_title="(TEST)INA",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded" 
 )
 
-max_retries=10
-
-# Database di conoscenza (come nell'originale)
+# Database di conoscenza
 KNOWLEDGE_BASE = {
             "PAE": {
                 "nome": "PAE",
@@ -61,7 +61,7 @@ KNOWLEDGE_BASE = {
                 "descrizione": "Servizio online per il rilascio immediato di licenze per concertini dal vivo in bar o ristoranti",
                 "tipologia": "Frontend",
                 "accessibilita": ["Front Office"],
-                "utenti_accessibili": ["Artisti", "Locali", "Delegati"],
+                "utenti_accessibili": ["Artisti", "Organizzatore Professionale", "Delegati"],
                 "scopo_principale": "Semplificare il processo di autorizzazione e pagamento per spettacoli musicali in pubblici esercizi",
                 "casi_d'uso": [
                     "Richiesta di licenza per evento musicale",
@@ -187,6 +187,35 @@ KNOWLEDGE_BASE = {
             },
 }
 
+CSS_VALUTATORE_STYLE = """
+<style>
+    /* Stili per i box degli elementi in base al tema */
+    @media (prefers-color-scheme: dark) {
+        .dark-mode-present { background-color: #006400 !important; color: #ffffff !important; border-left: 4px solid #00FF00;}
+        .dark-mode-missing { background-color: #8B0000 !important; color: #ffffff !important; border-left: 4px solid #FF4500;}
+        .dark-mode-improved { background-color: #00008B !important; color: #ffffff !important; border-left: 4px solid #1E90FF;}
+        .dark-mode-notes { background-color: #8B8000 !important; color: #ffffff !important; border-left: 4px solid #FFD700;}
+    }
+    @media (prefers-color-scheme: light) {
+        .dark-mode-present { background-color: #90EE90 !important; color: #006400 !important; border-left: 4px solid #008000;}
+        .dark-mode-missing { background-color: #FFA07A !important; color: #8B0000 !important; border-left: 4px solid #FF0000;}
+        .dark-mode-improved { background-color: #ADD8E6 !important; color: #000080 !important; border-left: 4px solid #0000FF;}
+        .dark-mode-notes { background-color: #FFFACD !important; color: #8B8000 !important; border-left: 4px solid #FFD700;}
+    }
+    .element-box {
+        padding: 12px 15px !important;
+        border-radius: 6px !important;
+        margin: 8px 0 !important;
+        font-weight: 500 !important;
+    }
+    .improved-box {
+        padding: 18px 20px !important;
+        margin-bottom: 25px !important;
+        font-size: 1.05em !important;
+    }
+</style>
+"""
+
 # Autenticazione con password semplice
 def check_password():
     def password_entered():
@@ -208,69 +237,202 @@ def check_password():
 
 check_password()  # 👈 Blocca l'accesso se la password è errata
 
-
+@st.cache_resource # Cache Jira instance
 def get_jira_instance():
     try:
         session = requests.Session()
-        
+
         jira = Jira(
             url=JIRA_URL,
             username=JIRA_USERNAME,
-            password=JIRA_TOKEN,
+            password=JIRA_TOKEN, # Use st.secrets for this
             session=session
         )
+        # Test connection
+        jira.myself()
         return jira
     except Exception as e:
-        st.error(f"Errore di connessione a Jira: {e}")
+        st.error(f"Errore di connessione a Jira: {e}. Verifica URL, credenziali, token e connessione VPN/proxy.")
         return None
 
-# Inizializza il client Google AI
+@st.cache_resource
 def get_genai_client():
-    return genai.Client(api_key=GEMINI_API_KEY)
+    try:
+        # Ensure GEMINI_API_KEY is loaded correctly, e.g., from st.secrets or .env
+        api_key_to_use = GEMINI_API_KEY
+        if not api_key_to_use or "YOUR_API_KEY" in api_key_to_use:
+            st.error("GEMINI_API_KEY non configurato correttamente. "
+                     "Impostala nelle variabili d'ambiente o nei secrets di Streamlit.")
+            return None
 
-def get_jira_projects(jira):
-    """Recupera tutti i progetti da Jira."""
-    if jira:
+        # This is the standard way to configure the google-generativeai library
+        genai.configure(api_key=api_key_to_use)
+        
+        # Test with a lightweight call if necessary, e.g., listing models,
+        # but configure() itself should work if the module is correct.
+        # For now, we assume configure() is the point of failure as per the error.
+        
+        return genai # Return the configured genai module
+        
+    except AttributeError as e:
+        if "'module' object has no attribute 'configure'" in str(e) or \
+           "'google.genai' has no attribute 'configure'" in str(e): # More specific check
+            st.error(f"Errore di attributo con GenAI (genai.configure): {e}. "
+                     "Questo solitamente indica che:\n"
+                     "1. La libreria 'google-generativeai' non è installata correttamente o è una versione obsoleta.\n"
+                     "2. C'è un conflitto di nomi: un file 'google.py' o 'genai.py' nella tua directory di progetto.\n"
+                     "3. Stai tentando di usare una libreria diversa da 'google-generativeai' che ha un'API differente.\n"
+                     "Assicurati di avere installato 'pip install google-generativeai' e che non ci siano conflitti.")
+        else:
+            st.error(f"Errore di attributo sconosciuto con GenAI: {e}")
+        return None
+    except Exception as e:
+        st.error(f"Errore generico durante la configurazione del client GenAI: {e}")
+        return None
+
+
+@st.cache_data # Cache Jira projects for a short time
+def get_jira_projects(_jira): # Pass Jira instance with underscore to use Streamlit's caching correctly
+    if _jira:
         try:
-            projects = jira.projects()
-            # Verifica il tipo di elemento in 'projects' per debug
+            projects = _jira.projects()
+            # Handle both list of dicts and list of Project objects
             if projects and isinstance(projects[0], dict):
-                return {project['key']: project['name'] for project in projects}  # Accesso tramite chiave
+                return {project['key']: project['name'] for project in projects}
             else:
-                return {project.key: project.name for project in projects} # Accesso tramite attributo (come prima)
+                return {project.key: project.name for project in projects}
         except Exception as e:
             st.error(f"Errore nel recupero dei progetti Jira: {e}")
-            return {}
-    else:
-        return {}
-        
-def get_project_issues(jira, project_key, issue_types):
-    """Recupera le issue di un progetto Jira."""
+    return {}
 
-    if jira and project_key:
-        jql_query = f"project={project_key} AND issuetype in ({','.join(issue_types)})"
+@st.cache_data(ttl=300) # Cache issues for 5 minutes
+def get_project_issues(_jira, project_key, issue_types_tuple): # issue_types must be hashable (tuple)
+    if _jira and project_key:
+        # Make issue_types_tuple a string for JQL
+        issue_types_str = ','.join([f'"{it}"' for it in issue_types_tuple])
+        jql_query = f"project={project_key} AND issuetype in ({issue_types_str}) ORDER BY created DESC"
         try:
-            issues = jira.jql(jql_query)  # Usa jira.jql invece di jira.search_issues
-            return issues['issues']  # Restituisce la lista di issue
+            issues = _jira.jql(jql_query, limit=100) # Added limit
+            return issues['issues'] if issues else []
         except Exception as e:
             st.error(f"Errore nel recupero delle issue: {e}")
-            return []
-    else:
-        return []
+    return []
 
-def display_issue_details(issue):
-    """Visualizza i dettagli di un'issue."""
-    with st.expander(f"Dettagli: {issue['key']} - {issue['fields']['summary']}"):
-        st.write(f"**Stato:** {issue['fields']['status']['name']}")
-        st.write(f"**Creato:** {issue['fields']['created']}")
-        st.write(f"**Assegnatario:** {issue['fields']['assignee']['displayName'] if issue['fields']['assignee'] else 'Nessuno'}")
-        st.write("**Descrizione:**")
-        st.markdown(issue['fields']['description'] if issue['fields']['description'] else "Nessuna descrizione fornita.")
+def parse_structured_text_to_sections(text_input: str):
+    if not text_input:
+        return {key_info["key"]: "Nessun contenuto disponibile."
+                for key_info in [
+                    {"key": "contesto"}, {"key": "attori"}, {"key": "scenari"},
+                    {"key": "variabili"}, {"key": "flusso"}
+                ]}
+    section_details = [
+        {"key": "contesto", "pattern_str": r"1\.\s*\*\*\s*Contesto Generale\s*\*\*"},
+        {"key": "attori", "pattern_str": r"2\.\s*\*\*\s*Attori Coinvolti\s*\*\*"},
+        {"key": "scenari", "pattern_str": r"3\.\s*\*\*\s*Scenari\s*\*\*:?"},
+        {"key": "variabili", "pattern_str": r"4\.\s*\*\*\s*Variabili Dinamiche\s*\*\*"},
+        {"key": "flusso", "pattern_str": r"###\s*Flusso di Lavoro\s*:?"},
+    ]
+    for detail in section_details:
+        detail["regex"] = re.compile(detail["pattern_str"], re.IGNORECASE | re.DOTALL)
 
-def run_valutatore_requisiti(requisito, client, model="gemini-2.0-flash-001"):
+    found_headers = []
+    for detail in section_details:
+        for match in detail["regex"].finditer(text_input):
+            found_headers.append({
+                "key": detail["key"],
+                "start_header": match.start(),
+                "end_header": match.end()
+            })
+    found_headers.sort(key=lambda x: x["start_header"])
+    parsed_content = {detail["key"]: "" for detail in section_details}
+    num_found = len(found_headers)
+    for i, header_match in enumerate(found_headers):
+        current_key = header_match["key"]
+        content_start_index = header_match["end_header"]
+        content_end_index = len(text_input)
+        if i + 1 < num_found:
+            content_end_index = found_headers[i+1]["start_header"]
+        content = text_input[content_start_index:content_end_index].strip()
+        parsed_content[current_key] = content
+    for detail in section_details:
+        key = detail["key"]
+        if not parsed_content.get(key, "").strip():
+            parsed_content[key] = "Nessun contenuto trovato per questa sezione."
+    return parsed_content
+
+def _parse_markdown_table_to_df(md_table_string):
+    if not md_table_string or not isinstance(md_table_string, str):
+        return pd.DataFrame()
+    lines = [line.strip() for line in md_table_string.strip().split('\n') if line.strip() and '|' in line]
+    if not lines: return pd.DataFrame()
+
+    header_line_index = -1
+    for i, line in enumerate(lines):
+        if not line.startswith('---') and not all(c in '-| ' for c in line):
+             # Potential header if it's the first line with '|' or follows a non-data line.
+            if header_line_index == -1: # Take the first valid candidate as header
+                header_line_index = i
+                break # Assume first valid line is header for simplicity of this parser
+
+    if header_line_index == -1 : return pd.DataFrame() # No header found
+
+    header = [h.strip() for h in lines[header_line_index].split('|') if h.strip()]
+    
+    data_lines = []
+    separator_found_after_header = False
+    for i in range(header_line_index + 1, len(lines)):
+        line = lines[i]
+        if line.startswith('---') or all(c in '-| ' for c in line):
+            separator_found_after_header = True
+            continue
+        if separator_found_after_header and header: # Only parse data after separator
+            cells = [cell.strip() for cell in line.split('|')]
+            # Adjust row length to header length
+            if len(cells) > len(header): cells = cells[:len(header)]
+            while len(cells) < len(header): cells.append("")
+            data_lines.append(cells)
+        elif not separator_found_after_header and header and i == header_line_index + 1 and not (line.startswith('---') or all(c in '-| ' for c in line)):
+            # If no separator line immediately after header, assume this is data
+            cells = [cell.strip() for cell in line.split('|')]
+            if len(cells) > len(header): cells = cells[:len(header)]
+            while len(cells) < len(header): cells.append("")
+            data_lines.append(cells)
+
+
+    if header and data_lines:
+        try:
+            df = pd.DataFrame(data_lines, columns=header)
+            return df
+        except Exception as e:
+            # Fallback if column numbers mismatch
+            # print(f"Error creating DataFrame: {e}. Header: {header}, First data row: {data_lines[0] if data_lines else 'No data'}")
+            # Attempt to create with generic column names if mismatch
+            if data_lines:
+                max_cols = max(len(row) for row in data_lines)
+                # If header is shorter than max_cols in data, it's problematic.
+                # For simplicity, we'll truncate data or pad header if possible,
+                # but a robust parser would handle this more gracefully.
+                # This simplified parser assumes header is mostly correct or data will be truncated.
+                if len(header) < max_cols and len(header) > 0: # If header is too short, use its length
+                    data_lines_adjusted = [row[:len(header)] for row in data_lines]
+                    return pd.DataFrame(data_lines_adjusted, columns=header)
+                elif len(header) >= max_cols and max_cols > 0: # If header is adequate or longer
+                     return pd.DataFrame(data_lines, columns=header[:max_cols if max_cols > 0 else 1])
+
+
+    # Fallback for tables without a '---' separator line but with a clear header
+    if header and data_lines and not separator_found_after_header and len(lines) > header_line_index +1 :
+         # This case is now partially handled above
+         pass
+
+    # print(f"Could not parse table. Header found: {header}. Data lines found: {len(data_lines)}") # Debug
+    return pd.DataFrame()
+
+
+# --- Agent Core Functions ( 그대로 유지, client 와 model 인자 추가 ) ---
+def run_valutatore_requisiti(requisito, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
     prompt = f"""
     Sei un esperto nella valutazione e miglioramento dei requisiti software. Il tuo compito è valutare se il requisito fornito contiene tutte le informazioni necessarie per evitare ambiguità e incomprensioni nello sviluppo.
-    
     Valuta il requisito in base ai seguenti criteri minimi (basati sugli standard delle user story):
     1. **Chi** - Chi è l'utente/attore principale (es. "Come [ruolo/utente]")
     2. **Cosa** - Cosa vuole ottenere (es. "voglio [funzionalità/obiettivo]")
@@ -278,72 +440,82 @@ def run_valutatore_requisiti(requisito, client, model="gemini-2.0-flash-001"):
     4. **Criteri di accettazione** - Condizioni che definiscono quando il requisito è soddisfatto
     5. **Contesto** - Informazioni sufficienti sul contesto d'uso
     6. **Dettagli tecnici** - Eventuali vincoli tecnici o specifiche
-    
+
     Se il requisito è completo, confermalo e suggerisci eventuali piccoli miglioramenti.
-    Se il requisito è incompleto, proporre una versione migliorata che includa tutti gli elementi mancanti, 
-    usando segnaposto generici come [soggetto], [formato], [ruolo], [funzionalità], [beneficio], [condizione], 
+    Se il requisito è incompleto, proporre una versione migliorata che includa tutti gli elementi mancanti,
+    usando segnaposto generici come [soggetto], [formato], [ruolo], [funzionalità], [beneficio], [condizione],
     [vincolo] dove le informazioni specifiche mancano.
-    
+
     Fornisci la tua valutazione in questo formato:
-    
+
     ### Valutazione Completezza:
     [Valutazione complessiva: Requisito completo / Requisito parzialmente completo / Requsito incompleto]
-    
+
     ### Elementi Presenti:
     - [Lista degli elementi presenti nel requisito]
-    
+
     ### Elementi Mancanti:
     - [Lista degli elementi mancanti che dovrebbero essere aggiunti]
-    
+
     ### Requisito Migliorato:
     [Versione migliorata del requisito con segnaposto generici per gli elementi mancanti]
-    
+
     ### Note:
     [Eventuali note aggiuntive o spiegazioni]
-    
+
     Ecco il requisito da valutare:
     {requisito}
-    
+
     **Rispondi solo in italiano**
     """
-    
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-    )
-    
+    model_instance = client_gemini.GenerativeModel(model_name=model)
+    response = model_instance.generate_content(prompt)
     return response.text
 
-def run_analista_requisiti(requisito, client, model="gemini-2.0-flash-001"):
+def run_analista_requisiti(requisito, client_gemini, model="gemini-1.5-flash-latest", previous_analysis_feedback=None): # Updated model
     context = ""
     for system_id, system_info in KNOWLEDGE_BASE.items():
         if system_id.lower() in requisito.lower():
             context = f"Informazioni dal knowledge base per il sistema {system_id}:\n"
             context += "\n".join([f"{key}: {value}" for key, value in system_info.items()])
+            break
+
     system_instruction = "Sei un assistente specializzato nell'analisi dei requisiti software. Rispondi in formato testo strutturato."
+    feedback_prompt_section = ""
+    if previous_analysis_feedback:
+        feedback_prompt_section = f"""
+        Una precedente valutazione del requisito ha fornito i seguenti suggerimenti, una versione migliorata o un'analisi. Prendine atto per la tua analisi attuale:
+        ---
+        {previous_analysis_feedback}
+        ---
+        Considera attentamente quanto sopra nel formulare la tua risposta. Se è stata fornita una versione migliorata del requisito, basa la tua analisi principalmente su quella, integrandola con il requisito originale se necessario.
+        """
+
     prompt = f"""
     {system_instruction}
-            
-        1. Il contesto generale del requisito (di cosa si tratta, qual è l'obiettivo)
-        2. I principali attori/utenti coinvolti
-        3. Gli scenari d'uso:
-           - Scenari principali (flusso normale)
-           - Scenari alternativi (flussi alternativi plausibili)
-           - Scenari negativi (situazioni in cui qualcosa non funziona)
-           - Corner cases (situazioni limite)
-        4. Le variabili dinamiche presenti nel requisito
-        5. Flusso di lavoro strutturato
-        
-        Ecco il requisito da analizzare:    
+    {feedback_prompt_section}
+
+    Analizza il seguente requisito software (considera il requisito originale e l'eventuale feedback fornito sopra). Fornisci:
+    1. Il contesto generale del requisito (di cosa si tratta, qual è l'obiettivo)
+    2. I principali attori/utenti coinvolti
+    3. Gli scenari d'uso:
+       - Scenari principali (flusso normale)
+       - Scenari alternativi (flussi alternativi plausibili)
+       - Scenari negativi (situazioni in cui qualcosa non funziona)
+       - Corner cases (situazioni limite)
+    4. Le variabili dinamiche presenti nel requisito
+    5. Flusso di lavoro strutturato
+
+    Ecco il requisito principale da analizzare (integra con il feedback se presente):
     {requisito}
-    
+
     {context}
-    
-    Fornisci la tua valutazione in questo formato:
-    
+
+    Fornisci la tua valutazione in questo formato ESATTO (non aggiungere altro testo prima o dopo):
+
     1. **Contesto Generale**
-    - [Il contesto generale del requisito (di cosa si tratta, qual è l'obiettivo]
-    
+    - [Il contesto generale del requisito (di cosa si tratta, qual è l'obiettivo)]
+
     2. **Attori Coinvolti**
     - [I principali attori/utenti coinvolti]
 
@@ -353,108 +525,107 @@ def run_analista_requisiti(requisito, client, model="gemini-2.0-flash-001"):
            - Scenari alternativi (flussi alternativi plausibili)
            - Scenari negativi (situazioni in cui qualcosa non funziona)
            - Corner cases (situazioni limite)]
-    
+
     4. **Variabili Dinamiche**
     - [Le variabili dinamiche presenti nel requisito]
-    
+
     ### Flusso di Lavoro:
     [Flusso di lavoro strutturato]
 
-    . **Rispondi solo in italiano, fornisci SOLO la struttura richiesta, senza testo pre e post**
+    . **Rispondi solo in italiano, fornisci SOLO la struttura richiesta, senza testo pre e post.**
     """
+    model_instance = client_gemini.GenerativeModel(model_name=model)
     for attempt in range(max_retries):
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-            )
+            response = model_instance.generate_content(prompt)
             return response.text
         except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(wait_time)  # Attendi prima di riprovare
-            else:
-                raise  # Se raggiunge il massimo dei tentativi, rilancia l'eccezione
+            if attempt < max_retries - 1: time.sleep(wait_time)
+            else: raise
 
-def run_analista_rischio(requisiti_analysis, client, model="gemini-2.0-flash-001"):
+def run_analista_rischio(requisiti_analysis, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
     prompt = f"""
         **Ruolo:** Sei un Analista di Rischio esperto, incaricato di valutare i rischi associati ai casi d'uso identificati nell'analisi dei requisiti fornita.
         **Obiettivo:** Generare un'analisi dei rischi in formato tabellare, facilmente convertibile in una tabella Markdown.
-        **Formato Tabellare Richiesto:**
+        **Formato Tabellare Richiesto (DEVI USARE QUESTO ESATTO FORMATO PER L'HEADER DELLA TABELLA):**
         ```
         ID|Scenario|Criticità|Fattore di Rischio|Motivazione|Frequenza|Rischio Finale
         ---|---|---|---|---|---|---
         ```
-        **Per ogni scenario presente nell'analisi dei requisiti, devi fornire le seguenti informazioni:**
+        **Per ogni scenario presente nell'analisi dei requisiti (sezione "3. **Scenari**"), devi fornire le seguenti informazioni:**
         * **ID:** Un identificatore univoco per il rischio (es. RS001, RS002, ecc.). Assicurati che ogni riga abbia un ID unico.
-        * **Scenario:** Una breve descrizione del caso d'uso o della funzionalità a cui si riferisce il rischio. Copia o riassumi lo scenario dall'analisi dei requisiti.
+        * **Scenario:** Una breve descrizione del caso d'uso o della funzionalità a cui si riferisce il rischio. Copia o riassumi lo scenario dall'analisi dei requisiti. Se non ci sono scenari espliciti, indica che non è possibile generare l'analisi.
         * **Criticità:** Una descrizione concisa della potenziale conseguenza negativa o del problema che potrebbe verificarsi.
-        * **Fattore di Rischio:** Una valutazione qualitativa della probabilità che l'evento critico si verifichi (basso, medio, alto).
+        * **Fattore di Rischio:** Una valutazione qualitativa della probabilità che l'evento critico si verifichi (Basso, Medio, Alto).
         * **Motivazione:** Una breve spiegazione del perché hai assegnato quel particolare fattore di rischio. Considera fattori come la complessità, le dipendenze, la familiarità del team, ecc.
-        * **Frequenza:** La frequenza prevista con cui lo scenario o la funzionalità verranno utilizzati (rara, occasionale, frequente).
+        * **Frequenza:** La frequenza prevista con cui lo scenario o la funzionalità verranno utilizzati (Rara, Occasionale, Frequente).
         * **Rischio Finale:** Una valutazione del rischio complessivo, derivata dalla combinazione della Criticità, del Fattore di Rischio e della Frequenza. Puoi usare una logica semplice (es. Basso + Rara = Basso, Alto + Frequente = Alto) o una tua expertise.
-        
+
         **Importante:**
         * **Rispondi unicamente con la tabella formattata in Markdown**, utilizzando il carattere `|` come separatore di colonne, come mostrato nell'esempio sopra. Non includere alcun altro testo o spiegazione al di fuori della tabella.
-        * Assicurati che la tabella sia ben formattata e facilmente parsabile.
-        * Analizza attentamente ogni scenario presente nell'analisi dei requisiti fornita.
-        
+        * Assicurati che la tabella sia ben formattata e facilmente parsabile. L'HEADER DEVE ESSERE ESATTAMENTE `ID|Scenario|Criticità|Fattore di Rischio|Motivazione|Frequenza|Rischio Finale` seguito dalla linea `---|---|---|---|---|---|---`.
+        * Analizza attentamente ogni scenario presente nell'analisi dei requisiti fornita. Se l'input `requisiti_analysis` è vuoto o non contiene scenari validi, restituisci una tabella vuota o un messaggio che indica "Nessuno scenario fornito per l'analisi dei rischi." dentro la tabella.
+
         **Analisi dei Requisiti:**
+        ```
         {requisiti_analysis}
+        ```
         """
+    model_instance = client_gemini.GenerativeModel(model_name=model)
     for attempt in range(max_retries):
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-            )
+            response = model_instance.generate_content(prompt)
             return response.text
         except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(wait_time)
-            else:
-                raise
+            if attempt < max_retries - 1: time.sleep(wait_time)
+            else: raise
 
-def run_generatore_test(requisiti_analysis, rischio_analysis, client, model="gemini-2.0-flash-001"):
+def run_generatore_test(requisiti_analysis, rischio_analysis, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
     prompt = f"""
         Sei un Test Engineer esperto. Il tuo compito è generare test case completi basati sull'analisi dei requisiti e sull'analisi del rischio.
-        Devi generare i test case in un formato strutturato che possa essere facilmente convertito in una tabella, seguendo questo schema per ogni test case:
+        Devi generare i test case in un formato strutturato che possa essere facilmente convertito in una tabella, seguendo ESATTAMENTE questo schema per ogni test case, inclusa la riga di separazione dell'header:
         ID|Titolo|Precondizioni|Passi|Risultato Atteso|Scenario|Rischio
         ---|------|------------|-----|---------------|--------|------
         Per ogni test case, specifica:
         - ID univoco del test (es. TC001)
         - Titolo descrittivo
-        - Precondizioni
-        - Passi da eseguire (separati da punto e virgola)
+        - Precondizioni (se non ci sono, scrivi "Nessuna")
+        - Passi da eseguire (separati da '; ' se multipli, o numerati con 1. 2. 3.)
         - Risultato atteso
-        - Scenario coperto
-        - Livello di rischio associato (basso, medio, alto)
-        Verifica poi che tutti i test case possibili siano stati coperti da almeno un caso di test, e che eventuali corner case abbiano anch'essi dei rispettivi test case.
+        - Scenario coperto (derivato dall'analisi dei requisiti)
+        - Livello di rischio associato (Basso, Medio, Alto - derivato dall'analisi del rischio)
+
+        Verifica poi che tutti gli scenari principali, alternativi, negativi e corner case identificati nell'analisi dei requisiti siano coperti da almeno un caso di test.
+        Dai priorità ai test case che coprono scenari ad alto rischio.
+
         Ecco l'analisi dei requisiti:
+        ```
         {requisiti_analysis}
+        ```
+
         Ecco l'analisi del rischio:
+        ```
         {rischio_analysis}
-        **Rispondi solo con la tabella, niente altro** e assicurati che l'output sia formattato come una tabella con il separatore | come mostrato sopra.
+        ```
+        **Rispondi solo con la tabella Markdown formattata come sopra, niente altro testo prima o dopo.**
+        Se non è possibile generare test case (es. input insufficienti), restituisci una tabella vuota con solo l'header e la riga di separazione.
         """
+    model_instance = client_gemini.GenerativeModel(model_name=model)
     for attempt in range(max_retries):
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-            )
+            response = model_instance.generate_content(prompt)
             return response.text
         except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(wait_time)
-            else:
-                raise
+            if attempt < max_retries - 1: time.sleep(wait_time)
+            else: raise
 
-def run_analizzatore_automazione(test_cases, client, model="gemini-2.0-flash-001"):
+def run_analizzatore_automazione(test_cases, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
     prompt = f"""
         Agisci come un Automation Engineer esperto con una forte mentalità orientata al ROI (Return on Investment). Il tuo compito è analizzare una serie di test case e determinare la loro idoneità all'automazione, considerando attentamente il bilanciamento tra il valore dell'automazione e l'effort necessario per implementarla in termini di tempo e risorse (costo). Suggerisci lo strumento più appropriato (Postman per test API o modifiche dati, Cypress per test end-to-end web, Appium per test end-to-end mobile) e assegna una priorità di automazione, concentrandoti sull'automazione di test **critici e fondamentali per la stabilità e la funzionalità in ambiente di produzione**.
-        Identifica come casi da automatizzare solo quelli che in rapporto costi/benefici rappresentano un importante valore aggiunto tale da giustificare la spesa
-        Dopo aver identificato i casi, restringili a quelli che si possono ripetere in produzione senza richiedere azioni dispositive (es storni a seguito di pagamenti per fare un test ecc)
-        
-        Fornisci la tua analisi in un formato tabellare Markdown, seguendo rigorosamente questa struttura:
+        Identifica come casi da automatizzare solo quelli che in rapporto costi/benefici rappresentano un importante valore aggiunto tale da giustificare la spesa.
+        Dopo aver identificato i casi, restringili a quelli che si possono ripetere in produzione senza richiedere azioni dispositive (es storni a seguito di pagamenti per fare un test ecc).
+
+        Fornisci la tua analisi in un formato tabellare Markdown, seguendo rigorosamente questa struttura (USA QUESTO ESATTO HEADER):
 
         ID Test|Titolo Test|Adatto Automazione?|Strumento Consigliato|Priorità Automazione|Stima Effort (Giorni Uomo)|Note Implementazione
         ---|---|---|---|---|---|---
@@ -465,1498 +636,689 @@ def run_analizzatore_automazione(test_cases, client, model="gemini-2.0-flash-001
         - Adatto Automazione?: Indica con "Sì" o "No" se il test è un buon candidato per l'automazione **considerando il rapporto tra il valore dell'automazione (riduzione del rischio in produzione, frequenza di esecuzione, tempo risparmiato a lungo termine) e l'effort stimato per implementarla**. Automatizza solo i test che portano un beneficio significativo in ottica di produzione.
         - Strumento Consigliato: Se "Adatto Automazione?" è "Sì", specifica lo strumento di automazione suggerito tra "Postman", "Cypress", "Appium". Se il test non è adatto, indica "Nessuno".
         - Priorità Automazione: Assegna una priorità all'automazione ("Alta", "Media", "Bassa") basata sull'**importanza del test per la stabilità in produzione, la frequenza di esecuzione e il ROI potenziale**. Concentrati sull'automatizzare con alta priorità i test fondamentali e critici.
-        - Stima Effort (Giorni Uomo): Fornisci una stima approssimativa dell'effort necessario per automatizzare completamente il test in termini di giorni uomo. Considera la complessità del test, la familiarità con lo strumento e la necessità di eventuali setup specifici.
-        - Note Implementazione: Includi eventuali considerazioni specifiche sull'implementazione dell'automazione per questo test, come prerequisiti, sfide potenziali, strategie particolari o se ci sono alternative all'automazione che potrebbero essere più efficienti.
+        - Stima Effort (Giorni Uomo): Fornisci una stima approssimativa dell'effort necessario per automatizzare completamente il test in termini di giorni uomo (es. 0.5, 1, 2). Considera la complessità del test, la familiarità con lo strumento e la necessità di eventuali setup specifici.
+        - Note Implementazione: Includi eventuali considerazioni specifiche sull'implementazione dell'automazione per questo test, come prerequisiti, sfide potenziali, strategie particolari o se ci sono alternative all'automazione che potrebbero essere più efficienti. Se non ci sono note particolari, scrivi "Nessuna".
 
-        **Rispondi unicamente con la tabella Markdown formattata**, senza aggiungere alcun altro testo o spiegazione. Assicurati che la tabella sia ben formattata con il carattere '|' come separatore di colonne.
+        **Rispondi unicamente con la tabella Markdown formattata**, senza aggiungere alcun altro testo o spiegazione. Assicurati che la tabella sia ben formattata con il carattere '|' come separatore di colonne e l'header specificato.
+        Se l'input `test_cases` è vuoto o non valido, restituisci una tabella vuota con solo l'header e la riga di separazione.
 
         Ecco i test case da analizzare:
+        ```
         {test_cases}
+        ```
     """
+    model_instance = client_gemini.GenerativeModel(model_name=model)
     for attempt in range(max_retries):
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-            )
+            response = model_instance.generate_content(prompt)
             return response.text
         except Exception as e:
-            if "503" in str(e) and attempt < max_retries - 1:
-                wait_time = (2 ** attempt) * 5  # Exponential backoff
-                print(f"Errore 503. Tentativo {attempt + 1} di {max_retries}. Ritento tra {wait_time} secondi...")
-            else:
-                raise  # Rilancia l'eccezione se non è un 503 o se ha superato i tentativi
+            # Simplified error handling for brevity in refactoring, original was more specific
+            if attempt < max_retries - 1: time.sleep(wait_time)
+            else: raise
 
-def run_analista_performance(requisiti_analysis, rischio_analysis, client, model="gemini-2.0-flash-001"):
+def run_analista_performance(requisiti_analysis, rischio_analysis, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
     prompt = f"""
     Sei un Performance Test Engineer esperto. Analizza i requisiti e i rischi per determinare se sono necessari performance test.
-    Rispondi in formato tabellare strutturato (usando | come separatore), seguendo ESATTAMENTE questo schema:
+    Rispondi in formato tabellare strutturato (usando | come separatore), seguendo ESATTAMENTE questo schema (USA QUESTO ESATTO HEADER):
 
     Necessari?|Tipo Test|Metriche Chiave|Soglie Ideali|Utenti Simulati|Note
-    ---|------|------------|-----|---------------|--------
-    [Sì/No]|[Load/Stress...]|[es. Latenza, Throughput]|[es. soglie ideali per best practice|[es. 100-1000]|[considerazioni aggiuntive]
+    ---|---|---|---|---|---
+    [Sì/No]|[Load/Stress/Endurance/Spike/Scalability]|[es. Latenza (ms), Throughput (RPS), Error Rate (%)]|[es. Latenza <200ms, Error Rate <0.1%]|[es. 100-1000 concurrent users]|[Considerazioni aggiuntive, scenari critici da testare]
 
     IMPORTANTE:
-    1. Usa SOLO il formato sopra specificato
-    2. Non aggiungere testo prima o dopo la tabella
-    3. Assicurati che ogni riga abbia ESATTAMENTE 6 colonne separate da |
+    1. Usa SOLO il formato sopra specificato.
+    2. Non aggiungere testo prima o dopo la tabella.
+    3. Assicurati che ogni riga abbia ESATTAMENTE 6 colonne separate da |.
+    4. Se non sono necessari test di performance, la prima colonna "Necessari?" deve essere "No" e le altre possono contenere "N/A" o brevi spiegazioni.
 
     Criteri per raccomandare performance test:
-    - Presenza di scenari ad alto traffico (es. pagamenti, login massivi)
-    - Requisiti non funzionali espliciti (es. "deve supportare 1000 RPS")
-    - Rischio alto di colli di bottiglia (es. database, API esterne)
-    - Componenti critici per il business (es. checkout, flussi pagamento)
+    - Presenza di scenari ad alto traffico identificati nell'analisi dei requisiti (es. pagamenti, login massivi, ricerche frequenti).
+    - Requisiti non funzionali espliciti relativi a performance (es. "il sistema deve supportare 1000 richieste per secondo").
+    - Rischio alto di colli di bottiglia identificato nell'analisi dei rischi (es. dovuto a dipendenze da database, API esterne lente, algoritmi complessi).
+    - Componenti critici per il business il cui fallimento sotto carico avrebbe impatti significativi (es. checkout, flussi di pagamento, core functionalities).
+    - Introduzione di nuove tecnologie o cambiamenti architetturali significativi.
+
+    Se l'analisi dei requisiti o dei rischi non fornisce informazioni sufficienti per una valutazione, indicalo nelle Note.
 
     Ecco l'analisi dei requisiti:
+    ```
     {requisiti_analysis}
+    ```
 
     Ecco l'analisi del rischio:
+    ```
     {rischio_analysis}
+    ```
     """
-    
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-    )
+    model_instance = client_gemini.GenerativeModel(model_name=model)
+    response = model_instance.generate_content(prompt)
     return response.text
 
-def jira_integration_page():
-    jira = get_jira_instance()
-    if not jira:
-        st.warning("Impossibile connettersi a Jira.")
+def run_analista_gestionale(test_cases, client_gemini, model="gemini-1.5-flash-latest"): # Updated model
+    prompt = f"""
+    Sei un Analista Gestionale esperto in QA IT con 10+ anni di esperienza nella stima degli effort di testing manuale.
+    Il tuo compito è stimare l'effort necessario per eseguire manualmente i test case forniti, considerando una call Teams tra tester e business per la review e l'esecuzione.
+
+    Linee guida per la stima (per ogni test case):
+    1. **Analisi Test Case e Setup Iniziale**: 10 minuti base per test case (comprensione, preparazione dati/ambiente se minimi).
+    2. **Esecuzione Passi**:
+        - Step Semplice (es. click, input testo semplice, verifica UI elementare): 2-3 minuti per step.
+        - Step Medio (es. compilazione form con più campi, navigazione tra poche pagine, verifica dati semplice): 4-6 minuti per step.
+        - Step Complesso (es. esecuzione di un flusso end-to-end breve, validazioni multiple, verifiche su DB/API di base, setup dati specifico): 7-10 minuti per step.
+    3. **Verifica Risultati e Documentazione**: 5-10 minuti per test case (confronto risultati attesi, cattura screenshot per fallimenti, log).
+    4. **Contingency Buffer**: Aggiungi un 15-20% sul totale stimato per imprevisti, discussioni, chiarimenti durante la sessione.
+    5. **Man Days**: Considera 1 Man Day = 7 ore effettive di lavoro. Arrotonda i Man Days al mezzo giorno più vicino (es. 0.5, 1, 1.5 MD).
+
+    Formato richiesto per l'output (DEVI USARE ESATTAMENTE QUESTO FORMATO):
+
+    ### Stima Effort Test Manuali
+
+    **Riepilogo Generale**
+    - Totale Test Case Analizzati: [Numero Totale dei Test Case Forniti]
+    - Stima Ore Totali Esecuzione (inclusa analisi, setup, verifica, contingency): [Y] ore
+    - Stima Man Days Complessivi Necessari: [L] MD
+
+    **Dettaglio per Test Case**
+    (Ripeti questa sezione per ogni Test Case fornito. Se non ci sono test case, indica "Nessun test case fornito per la stima.")
+
+    **Test Case [ID Test Case]: [Titolo Test Case]**
+    - Numero di Passi Stimati: [Numero di passi logici identificati nel test case]
+    - Complessità Media Stimata Passi: [Semplice/Media/Complessa/Mista]
+    - Stima Tempo Esecuzione Singolo Test Case (minuti): [Totale minuti per questo TC, inclusi analisi, setup, esecuzione, verifica]
+    - Note sulla stima: [Eventuali considerazioni specifiche per la stima di questo TC, es. "Richiede setup dati complesso", "Verifica su sistema esterno"]
+    ---
+
+    Analizza questi test case:
+    ```
+    {test_cases}
+    ```
+
+    **Rispondi solo in italiano con il formato richiesto. Non aggiungere testo introduttivo o conclusivo al di fuori della struttura specificata.**
+    Se l'input `test_cases` è vuoto, indica nel riepilogo "Nessun test case fornito" e ometti la sezione di dettaglio.
+    """
+    model_instance = client_gemini.GenerativeModel(model_name=model)
+    for attempt in range(max_retries):
+        try:
+            response = model_instance.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            if attempt < max_retries - 1: time.sleep(wait_time)
+            else: raise
+
+
+# --- Central Agent Definitions & Pipeline Orchestration ---
+AGENT_SPECS = {
+    "ValutatoreRequisiti": {
+        "run_function": run_valutatore_requisiti,
+        "button_label": "Valutatore Requisiti",
+        "inputs": {"requisito": "original_requirement"},
+    },
+    "AnalistaRequisiti": {
+        "run_function": run_analista_requisiti,
+        "button_label": "Analista Requisiti",
+        "inputs": {"requisito": "original_requirement", "previous_analysis_feedback": "ValutatoreRequisiti"},
+    },
+    "AnalistaRischio": {
+        "run_function": run_analista_rischio,
+        "button_label": "Analista Rischio",
+        "inputs": {"requisiti_analysis": "AnalistaRequisiti"},
+    },
+    "GeneratoreTest": {
+        "run_function": run_generatore_test,
+        "button_label": "Generatore Test",
+        "inputs": {"requisiti_analysis": "AnalistaRequisiti", "rischio_analysis": "AnalistaRischio"},
+    },
+    "AnalizzatoreAutomazione": {
+        "run_function": run_analizzatore_automazione,
+        "button_label": "Analizzatore Automazione",
+        "inputs": {"test_cases": "GeneratoreTest"},
+    },
+    "AnalizzatorePerformance": {
+        "run_function": run_analista_performance,
+        "button_label": "Analizzatore Performance",
+        "inputs": {"requisiti_analysis": "AnalistaRequisiti", "rischio_analysis": "AnalistaRischio"},
+    },
+    "AnalistaGestionale": {
+        "run_function": run_analista_gestionale,
+        "button_label": "Analista Gestionale",
+        "inputs": {"test_cases": "GeneratoreTest"},
+    }
+}
+AGENT_PIPELINE_ORDER = [
+    "ValutatoreRequisiti", "AnalistaRequisiti", "AnalistaRischio",
+    "GeneratoreTest", "AnalizzatoreAutomazione", "AnalizzatorePerformance",
+    "AnalistaGestionale"
+]
+
+def execute_agent_logic(req_id, agent_id, original_requirement_text, client_gemini, model_selection):
+    if req_id not in st.session_state.analysis_results:
+        st.session_state.analysis_results[req_id] = {}
+
+    agent_spec = AGENT_SPECS[agent_id]
+    kwargs = {}
+    all_inputs_available = True
+
+    for kwarg_name, source_key in agent_spec["inputs"].items():
+        if source_key == "original_requirement":
+            kwargs[kwarg_name] = original_requirement_text
+        else:
+            source_agent_data = st.session_state.analysis_results.get(req_id, {}).get(source_key, {})
+            if source_agent_data.get("status") == "completed":
+                kwargs[kwarg_name] = source_agent_data["output"]
+            else:
+                all_inputs_available = False
+                st.session_state.analysis_results[req_id][agent_id] = {
+                    "status": "blocked",
+                    "output": f"Input '{source_key}' non disponibile (stato: {source_agent_data.get('status', 'non eseguito')})."
+                }
+                return  # ⚠️ NON usare st.rerun() qui
+
+    if not all_inputs_available:
+        return  # ⚠️ Nessun st.rerun() qui
+
+    try:
+        st.session_state.analysis_results[req_id][agent_id] = {"status": "running", "output": None}
+        result = agent_spec["run_function"](client_gemini=client_gemini, model=model_selection, **kwargs)
+        st.session_state.analysis_results[req_id][agent_id] = {"status": "completed", "output": result}
+    except Exception as e:
+        st.session_state.analysis_results[req_id][agent_id] = {"status": "error", "output": str(e)}
+
+def run_full_analysis_pipeline(req_id, original_requirement_text, client_gemini, model_selection):
+    if not original_requirement_text or not original_requirement_text.strip():
+        st.warning(f"Requisito per '{req_id}' è vuoto. Analisi saltata.")
+        st.session_state.analysis_results[req_id] = {
+            agent_id: {"status": "skipped", "output": "Requisito vuoto"} for agent_id in AGENT_PIPELINE_ORDER
+        }
+        st.rerun() # MANTIENI: corretto per saltare questo item e rieseguire lo script
         return
 
-    projects = get_jira_projects(jira)
-    if not projects:
-        st.warning("Impossibile recuperare i progetti Jira.")
-        return
+    if req_id not in st.session_state.analysis_results:
+         st.session_state.analysis_results[req_id] = {}
 
-    # Utilizza st.columns per creare due colonne
+    for agent_id_init in AGENT_PIPELINE_ORDER:
+        if agent_id_init not in st.session_state.analysis_results.get(req_id, {}) or \
+           st.session_state.analysis_results[req_id][agent_id_init].get("status") not in ["completed", "running"]:
+            st.session_state.analysis_results[req_id][agent_id_init] = {"status": "pending", "output": None}
+
+    for agent_id in AGENT_PIPELINE_ORDER:
+        current_status_data = st.session_state.analysis_results.get(req_id, {}).get(agent_id, {})
+        current_status = current_status_data.get("status")
+
+        if current_status == "completed":
+            continue
+        if current_status == "running": 
+            continue
+
+        execute_agent_logic(req_id, agent_id, original_requirement_text, client_gemini, model_selection)
+
+        updated_status_data = st.session_state.analysis_results.get(req_id, {}).get(agent_id, {})
+        if updated_status_data.get("status") in ["error", "blocked"]:
+            current_agent_index = AGENT_PIPELINE_ORDER.index(agent_id)
+            for subsequent_agent_id in AGENT_PIPELINE_ORDER[current_agent_index+1:]:
+                if subsequent_agent_id not in st.session_state.analysis_results.get(req_id,{}) or \
+                    st.session_state.analysis_results[req_id].get(subsequent_agent_id,{}).get("status") == "pending":
+                    st.session_state.analysis_results[req_id][subsequent_agent_id] = {
+                        "status": "skipped_dependency",
+                        "output": f"Pipeline interrotta a {agent_id} ({updated_status_data.get('status')})"
+                    }
+            st.rerun() # MANTIENI: corretto per interrompere la pipeline per questo req_id e aggiornare l'UI
+            return 
+
+
+# --- Unified Display Logic ---
+def _extract_valutatore_section(content, section_title):
+    if not content: return ""
+    # Adjusted pattern to be more robust for section titles ending with ':'
+    pattern = re.compile(r"###\s*" + re.escape(section_title) + r":?\s*\n(.*?)(?=\n###\s|\Z)", re.S)
+    match = pattern.search(content)
+    return match.group(1).strip() if match else ""
+
+def display_valutatore_output_unified(result_text):
+    st.markdown(CSS_VALUTATORE_STYLE, unsafe_allow_html=True) # Ensure CSS is applied here
+    completezza = _extract_valutatore_section(result_text, "Valutazione Completezza")
+    presenti_text = _extract_valutatore_section(result_text, "Elementi Presenti")
+    mancanti_text = _extract_valutatore_section(result_text, "Elementi Mancanti")
+    migliorato = _extract_valutatore_section(result_text, "Requisito Migliorato")
+    note = _extract_valutatore_section(result_text, "Note")
+
+    st.markdown("#### 📊 Valutazione Completezza")
+    if completezza:
+        if "requisito completo" in completezza.lower() and not "parzialmente" in completezza.lower() and not "non completo" in completezza.lower() and not "incompleto" in completezza.lower() : st.success(f"✅ {completezza}")
+        elif "parzialmente completo" in completezza.lower(): st.warning(f"⚠️ {completezza}")
+        elif "incompleto" in completezza.lower() or "non completo" in completezza.lower(): st.error(f"❌ {completezza}")
+        else: st.info(completezza) # Default display if keywords not matched
+    else: st.info("Nessuna valutazione di completezza disponibile.")
+
+    st.markdown("#### 🔍 Elementi Identificati")
     col1, col2 = st.columns(2)
-
     with col1:
-        selected_project_key = st.selectbox("Seleziona Progetto Jira", options=list(projects.keys()),
-                                         format_func=projects.get)
+        st.markdown("##### ✅ Presenti")
+        if presenti_text:
+            present_items = [item.strip()[2:] for item in presenti_text.split('\n') if item.strip().startswith("- ")]
+            if present_items:
+                for item_val in present_items: st.markdown(f"<div class='element-box dark-mode-present'><strong>✓ {item_val}</strong></div>", unsafe_allow_html=True)
+            else: st.markdown(f"<div class='element-box dark-mode-present'><strong>{presenti_text}</strong></div>", unsafe_allow_html=True) # Show raw if not list
+        else: st.info("Nessuna informazione sugli elementi presenti.")
     with col2:
-        issue_types = st.multiselect("Seleziona Tipi di Issue", options=["Epic", "Story"], default=["Story"])
+        st.markdown("##### ❌ Mancanti")
+        if mancanti_text:
+            missing_items = [item.strip()[2:] for item in mancanti_text.split('\n') if item.strip().startswith("- ")]
+            if missing_items:
+                for item_val in missing_items: st.markdown(f"<div class='element-box dark-mode-missing'><strong>✗ {item_val}</strong></div>", unsafe_allow_html=True)
+            else: st.markdown(f"<div class='element-box dark-mode-missing'><strong>{mancanti_text}</strong></div>", unsafe_allow_html=True) # Show raw if not list
+        else: st.info("Nessuna informazione sugli elementi mancanti.")
 
-    issues = get_project_issues(jira, selected_project_key, issue_types)
+    if migliorato:
+        st.markdown("#### ✨ Requisito Migliorato")
+        st.markdown(f"<div class='element-box improved-box dark-mode-improved'>{migliorato}</div>", unsafe_allow_html=True)
+    if note:
+        st.markdown("#### 📝 Note Aggiuntive")
+        st.markdown(f"<div class='element-box dark-mode-notes'>{note}</div>", unsafe_allow_html=True)
 
-    selected_issues = []
+def display_analista_requisiti_output_unified(result_text):
+    sezioni = parse_structured_text_to_sections(result_text)
+    st.markdown("#### 🎯 Contesto Generale")
+    st.markdown(sezioni.get("contesto", "*Nessun contenuto per Contesto Generale*"))
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### 👥 Attori Coinvolti")
+        st.markdown(sezioni.get("attori", "*Nessun contenuto per Attori Coinvolti*"))
+    with col2:
+        st.markdown("#### ⚙️ Variabili Dinamiche")
+        st.markdown(sezioni.get("variabili", "*Nessun contenuto per Variabili Dinamiche*"))
+    col3, col4 = st.columns(2)
+    with col3:
+        st.markdown("#### 🎬 Scenari d'Uso")
+        st.markdown(sezioni.get("scenari", "*Nessun contenuto per Scenari d'Uso*"))
+    with col4:
+        st.markdown("#### 🛤️ Flusso di Lavoro")
+        st.markdown(sezioni.get("flusso", "*Nessun contenuto per Flusso di Lavoro*"))
+
+def display_table_output_unified(result_text, title):
+    # st.subheader(title) # Subheader is now the tab title itself
+    if result_text:
+        df = _parse_markdown_table_to_df(result_text)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.warning(f"Formato tabella per '{title}' non riconosciuto o tabella vuota.")
+            st.code(result_text, language="markdown") # Show raw output if parsing fails
+    else:
+        st.info(f"Output per '{title}' non disponibile.")
+
+def display_analista_gestionale_output_unified(result_text):
+    # st.subheader("Analisi Gestionale QA") # Subheader is now the tab title itself
+    if result_text:
+        st.markdown(result_text)
+    else:
+        st.info("Nessun risultato disponibile per l'Analista Gestionale.")
+
+AGENT_DISPLAY_HANDLERS = {
+    "ValutatoreRequisiti": display_valutatore_output_unified,
+    "AnalistaRequisiti": display_analista_requisiti_output_unified,
+    "AnalistaRischio": lambda output: display_table_output_unified(output, "Analisi dei Rischi"),
+    "GeneratoreTest": lambda output: display_table_output_unified(output, "Generazione Test Case"),
+    "AnalizzatoreAutomazione": lambda output: display_table_output_unified(output, "Analisi Automazione"),
+    "AnalizzatorePerformance": lambda output: display_table_output_unified(output, "Analisi Performance"),
+    "AnalistaGestionale": display_analista_gestionale_output_unified,
+}
+
+def render_unified_analysis_tabs(req_id, original_requirement_text, client_gemini, model_selection):
+    if req_id not in st.session_state.analysis_results:
+        st.session_state.analysis_results[req_id] = {}
+    req_results = st.session_state.analysis_results[req_id]
+
+    tab_titles = [AGENT_SPECS[agent_id]["button_label"] for agent_id in AGENT_PIPELINE_ORDER]
+    tabs = st.tabs(tab_titles)
+
+    for i, agent_id in enumerate(AGENT_PIPELINE_ORDER):
+        with tabs[i]:
+            agent_spec = AGENT_SPECS[agent_id]
+            # st.subheader(agent_spec["button_label"]) # Tab title serves as subheader
+
+            agent_data = req_results.get(agent_id, {"status": "pending"})
+            status = agent_data.get("status", "pending")
+            output = agent_data.get("output")
+
+            if status == "running":
+                st.spinner(f"Esecuzione di {agent_id}...")
+            elif status == "completed":
+                display_handler = AGENT_DISPLAY_HANDLERS.get(agent_id)
+                if display_handler:
+                    try:
+                        display_handler(output)
+                    except Exception as e:
+                        st.error(f"Errore nella visualizzazione del risultato di {agent_id}: {e}")
+                        st.text("Dati grezzi:")
+                        st.text(output)
+                else:
+                    st.text(output if output else "Nessun output prodotto.")
+            elif status == "error":
+                st.error(f"Errore in {agent_id}: {output}")
+            elif status == "blocked":
+                st.warning(f"{agent_id} bloccato. Causa: {output}")
+            elif status == "skipped" or status == "skipped_dependency":
+                st.info(f"{agent_id} saltato. Causa: {output}")
+            elif status == "pending":
+                 st.info(f"{agent_id} in attesa di esecuzione.")
+
+
+            # Button to run individual agent
+            if status not in ["running", "blocked"]: # Allow re-running if completed, error, pending, skipped
+                prereqs_met = True
+                missing_prereqs = []
+                for _, source_key_input in agent_spec["inputs"].items():
+                    if source_key_input != "original_requirement":
+                        source_agent_data = req_results.get(source_key_input, {})
+                        if source_agent_data.get("status") != "completed":
+                            prereqs_met = False
+                            missing_prereqs.append(f"{source_key_input} (stato: {source_agent_data.get('status', 'non eseguito')})")
+                
+                button_label_run_single = f"Esegui {agent_spec['button_label']}"
+                if status == "completed": button_label_run_single = f"Riesegui {agent_spec['button_label']}"
+                
+                if prereqs_met:
+                    if st.button(button_label_run_single, key=f"run_single_{agent_id}_{req_id}"):
+                        if not original_requirement_text.strip() and "original_requirement" in agent_spec["inputs"].values() :
+                            st.error("Il testo del requisito è vuoto. Impossibile eseguire l'agente.")
+                        else:
+                            execute_agent_logic(req_id, agent_id, original_requirement_text, client_gemini, model_selection)
+                elif status != "skipped_dependency": # Don't show button if skipped due to upstream failure shown by pipeline
+                    st.caption(f"Per eseguire '{agent_spec['button_label']}', completare prima: {', '.join(missing_prereqs)}")
+
+
+# --- Refactored Page Functions ---
+def single_requirement_page_refactored(client_gemini, global_model_selection):
+    REQ_ID_SINGLE = "single_page_active_requirement"
+
+    if 'single_page_requisito_text' not in st.session_state:
+        st.session_state.single_page_requisito_text = ""
+
+    st.session_state.single_page_requisito_text = st.text_area(
+        "Inserisci il requisito:",
+        value=st.session_state.single_page_requisito_text,
+        key="text_area_single_page_req",
+        height=120
+    )
+    current_requirement_text = st.session_state.single_page_requisito_text
+
+    col_run_single, col_clear_single = st.columns(2)
+    with col_run_single:
+        if st.button("🚀 Esegui Analisi Completa (Singolo)", key="run_all_single_page", type="primary", use_container_width=True):
+            if not current_requirement_text.strip():
+                st.warning("Inserisci un requisito prima di eseguire l'analisi completa.")
+            else:
+                run_full_analysis_pipeline(REQ_ID_SINGLE, current_requirement_text, client_gemini, global_model_selection)
+    with col_clear_single:
+        if st.button("🧹 Pulisci Risultati (Singolo)", key="clear_single_page", use_container_width=True):
+            if REQ_ID_SINGLE in st.session_state.analysis_results:
+                st.session_state.analysis_results[REQ_ID_SINGLE] = {}
+            # st.session_state.single_page_requisito_text = "" # Optionally clear text
+            st.rerun()
+
+    if REQ_ID_SINGLE in st.session_state.analysis_results and st.session_state.analysis_results[REQ_ID_SINGLE]:
+         render_unified_analysis_tabs(REQ_ID_SINGLE, current_requirement_text, client_gemini, global_model_selection)
+    elif not current_requirement_text.strip():
+        st.info("Inserisci un requisito e clicca 'Esegui Analisi Completa'.")
+
+
+def jira_integration_page_refactored(client_gemini, global_model_selection):
+    jira_instance = get_jira_instance()
+    if not jira_instance: return  # Errore già gestito
+
+    projects = get_jira_projects(jira_instance)
+    if not projects: return
+
+    # Sidebar per selezione progetto e tipo issue
+    st.sidebar.title("Configurazione Jira")
+    selected_project_key = st.sidebar.selectbox(
+        "Seleziona Progetto Jira",
+        options=list(projects.keys()),
+        format_func=projects.get,
+        key="jira_project_selector"
+    )
+
+    issue_types_options = ["Epic", "Story", "Task", "Bug"]
+    selected_issue_types = st.sidebar.multiselect(
+        "Seleziona Tipi di Issue",
+        options=issue_types_options,
+        default=["Story"],
+        key="jira_issue_type_selector"
+    )
+
+    if not selected_project_key or not selected_issue_types:
+        st.info("Seleziona un progetto e almeno un tipo di issue dalla sidebar.")
+        return
+
+    issues = get_project_issues(jira_instance, selected_project_key, tuple(selected_issue_types))
+
+    # Stato locale per mappare le selezioni
+    if 'jira_selected_issue_map' not in st.session_state:
+        st.session_state.jira_selected_issue_map = {}
+
+    st.subheader("Issue Trovate nel Progetto Selezionato")
     if issues:
-        st.subheader("Issue Trovate")
+        selected_keys_for_analysis = []
+        cols = st.columns(3)
+        for i, issue_data in enumerate(issues):
+            col = cols[i % 3]
+            issue_key = issue_data['key']
+            is_selected = col.checkbox(
+                f"{issue_key} - {issue_data['fields']['summary']}",
+                key=f"jira_cb_{issue_key}",
+                value=(issue_key in st.session_state.jira_selected_issue_map)
+            )
+            if is_selected:
+                selected_keys_for_analysis.append(issue_key)
+                st.session_state.jira_selected_issue_map[issue_key] = issue_data
+            elif issue_key in st.session_state.jira_selected_issue_map:
+                del st.session_state.jira_selected_issue_map[issue_key]
 
-        num_cols = 3  # Numero di colonne desiderato (4 per riga)
-        cols = st.columns(num_cols)
-        issue_index = 0
+            with col.expander("Dettagli Brevi"):
+                st.markdown(f"**Stato:** {issue_data['fields']['status']['name']}")
+                desc = issue_data['fields']['description']
+                st.markdown(f"**Descrizione:** {desc[:100]}..." if desc else "Nessuna descrizione.")
 
-        for issue in issues:
-            project_name = issue['fields']['project']['name']
-            display_text = f"**{issue['key']}** - {issue['fields']['summary']}"
+        # Inizializza coda batch se non esiste
+        if 'jira_batch_queue' not in st.session_state:
+            st.session_state.jira_batch_queue = []
+        if 'jira_batch_index' not in st.session_state:
+            st.session_state.jira_batch_index = 0
 
-            # Calcola l'indice della colonna
-            col_index = issue_index % num_cols
-            with cols[col_index]:
-                checkbox = st.checkbox(label=display_text, key=issue["key"])
-                if checkbox:
-                    selected_issues.append(issue)
-                # Aggiungi un piccolo expander per i dettagli (opzionale)
-                with st.expander("Dettagli", expanded=False):
-                    st.write(f" {issue['fields']['description'] if issue['fields']['description'] else 'Nessuna descrizione fornita.'}")
+        # Esegui analisi su tutte le selezionate
+        if st.button(f"🚀 Esegui Analisi per {len(st.session_state.jira_selected_issue_map)} Issue Selezionate", key="run_all_jira", type="primary", disabled=not st.session_state.jira_selected_issue_map):
+            st.session_state.jira_batch_queue = [
+                (f"jira_issue_{issue_k}", issue_d['fields'].get('description', ""))
+                for issue_k, issue_d in st.session_state.jira_selected_issue_map.items()
+            ]
+            st.session_state.jira_batch_index = 0
+            st.rerun()
 
-            issue_index += 1
+        # Pulsante per pulizia
+        if st.sidebar.button("🧹 Pulisci Risultati Jira Selezionati", key="clear_selected_jira_results", disabled=not st.session_state.jira_selected_issue_map):
+            for issue_k in list(st.session_state.jira_selected_issue_map.keys()):
+                req_id = f"jira_issue_{issue_k}"
+                if req_id in st.session_state.analysis_results:
+                    del st.session_state.analysis_results[req_id]
+            st.rerun()
+
+        # Visualizza risultati disponibili
+        if st.session_state.jira_selected_issue_map:
+            st.markdown("---")
+            st.subheader("Risultati Analisi per Issue Selezionate")
+        for issue_k, issue_data in st.session_state.jira_selected_issue_map.items():
+            req_id = f"jira_issue_{issue_k}"
+            if req_id in st.session_state.analysis_results and st.session_state.analysis_results[req_id]:
+                with st.expander(f"Analisi per {issue_k} - {issue_data['fields']['summary']}", expanded=True):
+                    description = issue_data['fields'].get('description', "")
+                    render_unified_analysis_tabs(req_id, description, client_gemini, global_model_selection)
+
     else:
         st.info("Nessuna issue trovata per i criteri selezionati.")
+        st.session_state.jira_selected_issue_map = {}
 
-    if selected_issues:
-        st.subheader("Azioni sulle Issue Selezionate")
-        if st.button("Esegui Analisi Completa"):
-            client = get_genai_client()
+    # Esecuzione batch queue
+    if st.session_state.get("jira_batch_queue"):
+        jira_queue = st.session_state["jira_batch_queue"]
+        idx = st.session_state.get("jira_batch_index", 0)
 
-            for issue in selected_issues:
-                st.subheader(f"Risultati Analisi {issue['key']} - {issue['fields']['summary']}")
+        if idx < len(jira_queue):
+            req_id, desc = jira_queue[idx]
 
-                if 'results' not in st.session_state:
-                    st.session_state.results = {
-                        "ValutatoreRequisiti": "",
-                        "AnalistaRequisiti": "",
-                        "AnalistaRischio": "",
-                        "GeneratoreTest": "",
-                        "AnalizzatoreAutomazione": "",
-                        "AnalizzatorePerformance": ""
-                    }
-                if 'requisito' not in st.session_state:
-                    st.session_state.requisito = ""
+            # Mostra uno spinner per l'elemento corrente
+            with st.spinner(f"Elaborazione issue Jira '{req_id}' ({idx + 1}/{len(jira_queue)})..."):
+                run_full_analysis_pipeline(req_id, desc, client_gemini, global_model_selection)
 
-                if issue['fields']['description']:
-                    # Esegui gli agenti e visualizza i risultati (come in single_requirement_page)
-                    with st.spinner("Esecuzione degli agenti..."):
-                        requisito = issue['fields']['description']
+            st.session_state.jira_batch_index += 1
+            st.rerun() # Passa all'elemento successivo o rifletti lo stato
+        else:
+            st.success("Tutte le issue Jira selezionate sono state elaborate.")
+            st.session_state.jira_batch_queue = []
+            st.session_state.jira_batch_index = 0
+            st.rerun() # Rerun finale per pulire e mostrare il messaggio di successo
 
-                        # Esegui Valutatore Requisiti
-                        valutatore_result = run_valutatore_requisiti(requisito, client, model="gemini-2.0-flash-001")
-                        st.session_state.results["ValutatoreRequisiti"] = valutatore_result
 
-                        # Esegui Analista Requisiti
-                        analista_result = run_analista_requisiti(requisito, client, model="gemini-2.0-flash-001")
-                        st.session_state.results["AnalistaRequisiti"] = analista_result
+def multiple_requirements_page_refactored(client_gemini, global_model_selection):
+    SESSION_KEY_MULTI_REQS_LIST = "multi_page_req_list_texts"
+    MULTI_REQ_ID_PREFIX = "multi_item_analysis_"
+    SESSION_KEY_MULTI_BATCH_QUEUE = "multi_req_batch_queue"
+    SESSION_KEY_MULTI_BATCH_INDEX = "multi_req_batch_index"
 
-                        # Esegui Analista Rischio
-                        analista_rischio_result = run_analista_rischio(analista_result, client, model="gemini-2.0-flash-001")
-                        st.session_state.results["AnalistaRischio"] = analista_rischio_result
+    if SESSION_KEY_MULTI_REQS_LIST not in st.session_state:
+        st.session_state[SESSION_KEY_MULTI_REQS_LIST] = [""]
+    if SESSION_KEY_MULTI_BATCH_QUEUE not in st.session_state:
+        st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE] = []
+    if SESSION_KEY_MULTI_BATCH_INDEX not in st.session_state:
+        st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] = 0
 
-                        # Esegui Generatore Test
-                        generatore_test_result = run_generatore_test(analista_result, analista_rischio_result, client, model="gemini-2.0-flash-001")
-                        st.session_state.results["GeneratoreTest"] = generatore_test_result
+    st.subheader("Inserisci Requisiti Multipli")
 
-                        # Esegui Analizzatore Automazione
-                        analizzatore_automazione_result = run_analizzatore_automazione(generatore_test_result, client, model="gemini-2.0-flash-001")
-                        st.session_state.results["AnalizzatoreAutomazione"] = analizzatore_automazione_result
-
-                        # Esegui Analizzatore Performance
-                        analizzatore_performance_result = run_analista_performance(analista_result, analista_rischio_result, client, model="gemini-2.0-flash-001")
-                        st.session_state.results["AnalizzatorePerformance"] = analizzatore_performance_result
-
-                    # Visualizza i risultati (ADATTATO DA single_requirement_page)
-                    st.markdown("""
-                        <style>
-                            /* Stili per i box degli elementi in base al tema - VERSIONE ACCESA */
-                            @media (prefers-color-scheme: dark) {
-                                /* Stili per la dark mode */
-                                .dark-mode-present {
-                                    background-color: #006400 !important;  /* Verde più acceso */
-                                    color: #ffffff !important;
-                                    border-left: 4px solid #00FF00;
-                                }
-
-                                .dark-mode-missing {
-                                    background-color: #8B0000 !important;  /* Rosso più acceso */
-                                    color: #ffffff !important;
-                                    border-left: 4px solid #FF4500;
-                                }
-
-                                .dark-mode-improved {
-                                    background-color: #00008B !important;  /* Blu più acceso */
-                                    color: #ffffff !important;
-                                    border-left: 4px solid #1E90FF;
-                                }
-
-                                .dark-mode-notes {
-                                    background-color: #8B8000 !important;  /* Giallo/oro più acceso */
-                                    color: #ffffff !important;
-                                    border-left: 4px solid #FFD700;
-                                }
-                            }
-
-                            @media (prefers-color-scheme: light) {
-                                /* Stili per la light mode */
-                                .dark-mode-present {
-                                    background-color: #90EE90 !important;  /* Verde chiaro acceso */
-                                    color: #006400 !important;
-                                    border-left: 4px solid #008000;
-                                }
-
-                                .dark-mode-missing {
-                                    background-color: #FFA07A !important;  /* Rosso chiaro acceso */
-                                    color: #8B0000 !important;
-                                    border-left: 4px solid #FF0000;
-                                }
-
-                                .dark-mode-improved {
-                                    background-color: #ADD8E6 !important;  /* Blu chiaro acceso */
-                                    color: #000080 !important;
-                                    border-left: 4px solid #0000FF;
-                                }
-
-                                .dark-mode-notes {
-                                    background-color: #FFFACD !important;  /* Giallo chiaro acceso */
-                                    color: #8B8000 !important;
-                                    border-left: 4px solid #FFD700;
-                                }
-                            }
-
-                            /* Stili comuni per i box - AUMENTATO IL PADDING E MARGIN */
-                            .element-box {
-                                padding: 12px 15px !important;
-                                border-radius: 6px !important;
-                                margin: 8px 0 !important;
-                                font-weight: 500 !important;
-                            }
-                            /* Classe generale più grande per il box del requisito migliorato */
-                            .improved-box {
-                                padding: 18px 20px !important;
-                                margin-bottom: 25px !important;
-                                font-size: 1.05em !important;
-                            }
-                        </style>
-                    """, unsafe_allow_html=True)
-
-                    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                        "Valutatore Requisiti", "Analista Requisiti", "Analista Rischio",
-                        "Generatore Test", "Analizzatore Automazione", "Performance Test"
-                    ])
-
-                    with tab0:
-                        st.subheader("Valutazione e Miglioramento Requisiti")
-                        vr_result = st.session_state.results.get("ValutatoreRequisiti", "")
-                        if vr_result:
-                            # Funzione per estrarre sezioni
-                            def extract_section(content, section_title):
-                                start_idx = content.find(f"### {section_title}:")
-                                if start_idx == -1:
-                                    return ""
-                                start_idx += len(f"### {section_title}:") + 1
-                                end_idx = content.find("### ", start_idx)
-                                if end_idx == -1:
-                                    return content[start_idx:].strip()
-                                return content[start_idx:end_idx].strip()
-
-                            # Estrai le sezioni
-                            completezza = extract_section(vr_result, "Valutazione Completezza")
-                            presenti = extract_section(vr_result, "Elementi Presenti")
-                            mancanti = extract_section(vr_result, "Elementi Mancanti")
-                            migliorato = extract_section(vr_result, "Requisito Migliorato")
-                            note = extract_section(vr_result, "Note")
-
-                            # 1. Valutazione di completezza con indicatore visivo
-                            st.markdown("### 📊 Valutazione Completezza")
-                            if completezza:
-                                if "incompleto" not in completezza.lower() and "parzialmente" not in completezza.lower():
-                                    st.success(f"✅ {completezza}")
-                                elif "parzialmente" in completezza.lower():
-                                    st.warning(f"⚠️ {completezza}")
-                                else:
-                                    st.error(f"❌ {completezza}")
-                            else:
-                                st.info("Nessuna valutazione di completezza disponibile")
-
-                            # 2. Layout a colonne per elementi presenti/mancanti
-                            st.markdown("### 🔍 Elementi Identificati")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.markdown("#### ✅ Presenti")
-                                if presenti:
-                                    present_items = [item.strip()[2:] for item in presenti.split('\n') if item.startswith("- ")]
-                                    if present_items:
-                                        for item in present_items:
-                                            st.markdown(f"""
-                                                <div class='element-box dark-mode-present'>
-                                                    <strong>✓ {item}</strong>
-                                                </div>
-                                            """, unsafe_allow_html=True)
-                                    else:
-                                        st.info("Nessun elemento presente identificato")
-                                else:
-                                    st.info("Nessuna informazione sugli elementi presenti")
-                            with col2:
-                                st.markdown("#### ❌ Mancanti")
-                                if mancanti:
-                                    missing_items = [item.strip()[2:] for item in mancanti.split('\n') if item.startswith("- ")]
-                                    if missing_items:
-                                        for item in missing_items:
-                                            st.markdown(f"""
-                                                <div class='element-box dark-mode-missing'>
-                                                    <strong>✗ {item}</strong>
-                                                </div>
-                                            """, unsafe_allow_html=True)
-                                    else:
-                                        st.success("Tutti gli elementi necessari sono presenti!")
-                                else:
-                                    st.info("Nessuna informazione sugli elementi mancanti")
-
-                            # 3. Requisito migliorato (sotto gli elementi mancanti)
-                            if migliorato:
-                                st.markdown("### ✨ Requisito Migliorato")
-                                st.markdown(f"""
-                                    <div class='element-box improved-box dark-mode-improved'>
-                                        <strong>{migliorato}</strong>
-                                    </div>
-                                """, unsafe_allow_html=True)
-                            else:
-                                st.info("Nessuna versione migliorata del requisito disponibile")
-
-                            # 4. Note aggiuntive (alla fine)
-                            if note:
-                                st.markdown("### 📝 Note Aggiuntive")
-                                st.markdown(f"""
-                                    <div class='element-box dark-mode-notes'>
-                                        <strong>{note}</strong>
-                                    </div>
-                                """, unsafe_allow_html=True)
-                            else:
-                                st.info("Esegui il Valutatore Requisiti per visualizzare l'analisi")
-                        else:
-                            st.info("Esegui il Valutatore Requisiti per visualizzare l'analisi")
-                    with tab1:
-                        st.subheader("Analisi dei Requisiti e Scenari")
-                        def parse_analisi_requisiti(text):
-                            # Lista delle sezioni attese con keyword associate
-                            section_keywords = {
-                                "contesto": ["contesto", "obiettivo"],
-                                "attori": ["attori", "utenti", "coinvolti"],
-                                "scenari": ["scenari"],
-                                "variabili": ["variabili", "dinamiche"],
-                                "flusso": ["flusso di lavoro"]
-                            }
-                            sezioni = {k: "" for k in section_keywords}
-                            lines = text.strip().split('\n')
-                            current_key = None
-                            for line in lines:
-                                line_clean = line.strip().lower()
-                                # Cerca se la linea è un'intestazione
-                                for key, keywords in section_keywords.items():
-                                    if any(kw in line_clean for kw in keywords) and len(line_clean) < 80:
-                                        current_key = key
-                                        break
-                                else:
-                                    if current_key:
-                                        sezioni[current_key] += line.strip() + "\n"
-                            # Sezione vuota fallback
-                            for key in sezioni:
-                                if not sezioni[key].strip():
-                                    sezioni[key] = "Nessun contenuto trovato"
-                            return sezioni
-                        ar_result = st.session_state.results["AnalistaRequisiti"]
-                        if ar_result:
-                            sezioni = parse_analisi_requisiti(ar_result)
-                            st.markdown("### 🎯 Contesto Generale")
-                            st.markdown(sezioni["contesto"] or "*Nessun contenuto trovato*")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.markdown("### 👥 Attori Coinvolti")
-                                st.markdown(sezioni["attori"] or "*Nessun contenuto trovato*")
-                            with col2:
-                                st.markdown("### ⚙️ Variabili Dinamiche")
-                                st.markdown(sezioni["variabili"] or "*Nessun contenuto trovato*")
-                            col3, col4 = st.columns(2)
-                            with col3:
-                                st.markdown("### 🎬 Scenari d'Uso")
-                                st.markdown(sezioni["scenari"] or "*Nessun contenuto trovato*")
-                            with col4:
-                                st.markdown("### 🛤️ Flusso di Lavoro")
-                                st.markdown(sezioni["flusso"] or "*Nessun contenuto trovato*")
-                        else:
-                            st.info("Esegui l'Analista dei Requisiti per visualizzare l'analisi")
-               
-                    with tab2:
-                        st.subheader("Analisi dei Rischi")
-                        res = st.session_state.results["AnalistaRischio"]
-                        if res:
-                            try:
-                                # Dividi il risultato in linee
-                                lines = res.strip().split('\n')
-                                
-                                # Estrai l'header (prima linea valida)
-                                header = None
-                                data_lines = []
-                                separator_line = False
-                                
-                                for line in lines:
-                                    if line.strip().startswith('---'):
-                                        separator_line = True
-                                        continue
-                                    if '|' in line:
-                                        if not header and not separator_line:
-                                            header = [h.strip() for h in line.split('|')]
-                                        elif header and separator_line:
-                                            data_lines.append([cell.strip() for cell in line.split('|')])
-                                
-                                if header and data_lines:
-                                    # Crea DataFrame
-                                    df = pd.DataFrame(data_lines, columns=header)
-                                    st.dataframe(df)
-                                else:
-                                    st.warning("Formato tabella non riconosciuto.")
-                                    st.text(res)
-                            except Exception as e:
-                                st.error(f"Errore durante l'elaborazione della tabella: {e}")
-                                st.text(res)
-                        else:
-                            st.info("Esegui l'analisi per visualizzare l'analisi dei rischi.")
-
-                    with tab3:
-                        st.subheader("Generazione Test Case")
-                        res = st.session_state.results["GeneratoreTest"]
-                        if res:
-                            try:
-                                # Stessa logica di parsing del tab2
-                                lines = res.strip().split('\n')
-                                header = None
-                                data_lines = []
-                                separator_line = False
-                                
-                                for line in lines:
-                                    if line.strip().startswith('---'):
-                                        separator_line = True
-                                        continue
-                                    if '|' in line:
-                                        if not header and not separator_line:
-                                            header = [h.strip() for h in line.split('|')]
-                                        elif header and separator_line:
-                                            data_lines.append([cell.strip() for cell in line.split('|')])
-                                
-                                if header and data_lines:
-                                    df = pd.DataFrame(data_lines, columns=header)
-                                    st.dataframe(df)
-                                else:
-                                    st.warning("Formato tabella non riconosciuto.")
-                                    st.text(res)
-                            except Exception as e:
-                                st.error(f"Errore durante l'elaborazione della tabella: {e}")
-                                st.text(res)
-                        else:
-                            st.info("Esegui l'analisi per visualizzare i test case generati.")
-
-                    with tab4:
-                        st.subheader("Analisi Automazione")
-                        res = st.session_state.results["AnalizzatoreAutomazione"]
-                        if res:
-                            try:
-                                # Stessa logica di parsing del tab2
-                                lines = res.strip().split('\n')
-                                header = None
-                                data_lines = []
-                                separator_line = False
-                                
-                                for line in lines:
-                                    if line.strip().startswith('---'):
-                                        separator_line = True
-                                        continue
-                                    if '|' in line:
-                                        if not header and not separator_line:
-                                            header = [h.strip() for h in line.split('|')]
-                                        elif header and separator_line:
-                                            data_lines.append([cell.strip() for cell in line.split('|')])
-                                
-                                if header and data_lines:
-                                    df = pd.DataFrame(data_lines, columns=header)
-                                    st.dataframe(df)
-                                else:
-                                    st.warning("Formato tabella non riconosciuto.")
-                                    st.text(res)
-                            except Exception as e:
-                                st.error(f"Errore durante l'elaborazione della tabella: {e}")
-                                st.text(res)
-                        else:
-                            st.info("Esegui l'analisi per visualizzare l'analisi di automazione.")
-
-                    with tab5:
-                        st.subheader("Analisi Performance")
-                        res = st.session_state.results["AnalizzatorePerformance"]
-                        if res:
-                            try:
-                                # Stessa logica di parsing del tab2
-                                lines = res.strip().split('\n')
-                                header = None
-                                data_lines = []
-                                separator_line = False
-                                
-                                for line in lines:
-                                    if line.strip().startswith('---'):
-                                        separator_line = True
-                                        continue
-                                    if '|' in line:
-                                        if not header and not separator_line:
-                                            header = [h.strip() for h in line.split('|')]
-                                        elif header and separator_line:
-                                            data_lines.append([cell.strip() for cell in line.split('|')])
-                                
-                                if header and data_lines:
-                                    df = pd.DataFrame(data_lines, columns=header)
-                                    st.dataframe(df)
-                                else:
-                                    st.warning("Formato tabella non riconosciuto.")
-                                    st.text(res)
-                            except Exception as e:
-                                st.error(f"Errore durante l'elaborazione della tabella: {e}")
-                                st.text(res)
-                        else:
-                            st.info("Esegui l'analisi per visualizzare l'analisi di Perfomance.")
-
-def single_requirement_page():
-    # Sostituisci la parte CSS relativa ai colori dei box nel tab 0 con questo:
-    st.markdown("""
-    <style>
-        /* Stili per i box degli elementi in base al tema - VERSIONE ACCESA */
-        @media (prefers-color-scheme: dark) {
-            /* Stili per la dark mode */
-            .dark-mode-present {
-                background-color: #006400 !important;  /* Verde più acceso */
-                color: #ffffff !important;
-                border-left: 4px solid #00FF00;
-            }
-            
-            .dark-mode-missing {
-                background-color: #8B0000 !important;  /* Rosso più acceso */
-                color: #ffffff !important;
-                border-left: 4px solid #FF4500;
-            }
-            
-            .dark-mode-improved {
-                background-color: #00008B !important;  /* Blu più acceso */
-                color: #ffffff !important;
-                border-left: 4px solid #1E90FF;
-            }
-            
-            .dark-mode-notes {
-                background-color: #8B8000 !important;  /* Giallo/oro più acceso */
-                color: #ffffff !important;
-                border-left: 4px solid #FFD700;
-            }
-        }
-        
-        @media (prefers-color-scheme: light) {
-            /* Stili per la light mode */
-            .dark-mode-present {
-                background-color: #90EE90 !important;  /* Verde chiaro acceso */
-                color: #006400 !important;
-                border-left: 4px solid #008000;
-            }
-            
-            .dark-mode-missing {
-                background-color: #FFA07A !important;  /* Rosso chiaro acceso */
-                color: #8B0000 !important;
-                border-left: 4px solid #FF0000;
-            }
-            
-            .dark-mode-improved {
-                background-color: #ADD8E6 !important;  /* Blu chiaro acceso */
-                color: #000080 !important;
-                border-left: 4px solid #0000FF;
-            }
-            
-            .dark-mode-notes {
-                background-color: #FFFACD !important;  /* Giallo chiaro acceso */
-                color: #8B8000 !important;
-                border-left: 4px solid #FFD700;
-            }
-        }
-        
-        /* Stili comuni per i box - AUMENTATO IL PADDING E MARGIN */
-        .element-box {
-            padding: 12px 15px !important; 
-            border-radius: 6px !important; 
-            margin: 8px 0 !important;
-            font-weight: 500 !important;
-        }
-        
-        /* Classe generale più grande per il box del requisito migliorato */
-        .improved-box {
-            padding: 18px 20px !important;
-            margin-bottom: 25px !important;
-            font-size: 1.05em !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Inizializza lo stato della sessione - AGGIUNTA LA CHIAVE "ValutatoreRequisiti"
-    if 'results' not in st.session_state:
-        st.session_state.results = {
-            "ValutatoreRequisiti": "",  # Aggiunto questo
-            "AnalistaRequisiti": "",
-            "AnalistaRischio": "",
-            "GeneratoreTest": "",
-            "AnalizzatoreAutomazione": ""
-        }
-    
-    if 'requisito' not in st.session_state:
-        st.session_state.requisito = ""
-    
-    # Client Google AI (viene creato una sola volta)
-    client = get_genai_client()
-    
-    # Sidebar per i controlli
-    with st.sidebar:
-        st.header("Controlli")
-        model_selection = st.selectbox(
-            "Seleziona modello:",
-            ["gemini-2.0-flash-001", "gemini-2.0-pro-001"],
-            index=0
+    req_list_copy = list(st.session_state[SESSION_KEY_MULTI_REQS_LIST])
+    for i in range(len(req_list_copy)):
+        cols_multi_req_input = st.columns([10, 1])
+        st.session_state[SESSION_KEY_MULTI_REQS_LIST][i] = cols_multi_req_input[0].text_area(
+            f"Requisito {i+1}",
+            value=req_list_copy[i],
+            key=f"multi_req_text_area_item_{i}",
+            height=80
         )
-        if st.button("Pulisci Tutto"):
-            st.session_state.results = {
-                "ValutatoreRequisiti": "",  # Aggiunto questo
-                "AnalistaRequisiti": "",
-                "AnalistaRischio": "",
-                "GeneratoreTest": "",
-                "AnalizzatoreAutomazione": ""
-            }
-            st.session_state.requisito = ""
-            st.rerun()
-    
-    # Area input requisito
-    st.text_area("Inserisci il requisito:", key="requisito", height=80)
-    
-    # Aggiungi un nuovo tab accanto agli altri
-    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Valutatore Requisiti", 
-        "Analista Requisiti", 
-        "Analista Rischio", 
-        "Generatore Test", 
-        "Analizzatore Automazione",
-        "Performance Test",
-    ])
-    
-    with tab0:
-        st.subheader("Valutazione e Miglioramento Requisiti")
-        if st.button("Esegui Valutatore Requisiti"):
-            if not st.session_state.requisito:
-                st.warning("Inserisci un requisito prima di eseguire la valutazione")
-            else:
-                with st.spinner("Valutazione requisito in corso..."):
-                    result = run_valutatore_requisiti(st.session_state.requisito, client, model=model_selection)
-                    st.session_state.results["ValutatoreRequisiti"] = result
-        
-        vr_result = st.session_state.results.get("ValutatoreRequisiti", "")
-        
-        if vr_result:
-            # Funzione per estrarre sezioni
-            def extract_section(content, section_title):
-                start_idx = content.find(f"### {section_title}:")
-                if start_idx == -1:
-                    return ""
-                
-                start_idx += len(f"### {section_title}:") + 1
-                end_idx = content.find("### ", start_idx)
-                if end_idx == -1:
-                    return content[start_idx:].strip()
-                return content[start_idx:end_idx].strip()
-            
-            # Estrai le sezioni
-            completezza = extract_section(vr_result, "Valutazione Completezza")
-            presenti = extract_section(vr_result, "Elementi Presenti")
-            mancanti = extract_section(vr_result, "Elementi Mancanti")
-            migliorato = extract_section(vr_result, "Requisito Migliorato")
-            note = extract_section(vr_result, "Note")
-            
-            # 1. Valutazione di completezza con indicatore visivo
-            st.markdown("### 📊 Valutazione Completezza")
-            if completezza:
-                if "incompleto" not in completezza.lower() and "parzialmente" not in completezza.lower():
-                    st.success(f"✅ {completezza}")
-                elif "parzialmente" in completezza.lower():
-                    st.warning(f"⚠️ {completezza}")
-                else:
-                    st.error(f"❌ {completezza}")
-            else:
-                st.info("Nessuna valutazione di completezza disponibile")
-            
-            # 2. Layout a colonne per elementi presenti/mancanti
-            st.markdown("### 🔍 Elementi Identificati")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### ✅ Presenti")
-                if presenti:
-                    present_items = [item.strip()[2:] for item in presenti.split('\n') if item.startswith("- ")]
-                    if present_items:
-                        for item in present_items:
-                            st.markdown(f"""
-                            <div class='element-box dark-mode-present'>
-                            <strong>✓ {item}</strong>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    else:
-                        st.info("Nessun elemento presente identificato")
-                else:
-                    st.info("Nessuna informazione sugli elementi presenti")
-            
-            with col2:
-                st.markdown("#### ❌ Mancanti")
-                if mancanti:
-                    missing_items = [item.strip()[2:] for item in mancanti.split('\n') if item.startswith("- ")]
-                    if missing_items:
-                        for item in missing_items:
-                            st.markdown(f"""
-                            <div class='element-box dark-mode-missing'>
-                            <strong>✗ {item}</strong>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    else:
-                        st.success("Tutti gli elementi necessari sono presenti!")
-                else:
-                    st.info("Nessuna informazione sugli elementi mancanti")
-            
-            # 3. Requisito migliorato (sotto gli elementi mancanti)
-            if migliorato:
-                st.markdown("### ✨ Requisito Migliorato")
-                st.markdown(f"""
-                <div class='element-box improved-box dark-mode-improved'>
-                <strong>{migliorato}</strong>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("Nessuna versione migliorata del requisito disponibile")
-            
-            # 4. Note aggiuntive (alla fine)
-            if note:
-                st.markdown("### 📝 Note Aggiuntive")
-                st.markdown(f"""
-                <div class='element-box dark-mode-notes'>
-                <strong>{note}</strong>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("Esegui il Valutatore Requisiti per visualizzare l'analisi")
+        if cols_multi_req_input[1].button("➖", key=f"remove_multi_req_item_{i}"):
+            if len(st.session_state[SESSION_KEY_MULTI_REQS_LIST]) > 1:
+                st.session_state[SESSION_KEY_MULTI_REQS_LIST].pop(i)
+                req_id_to_remove = f"{MULTI_REQ_ID_PREFIX}{i}" # La logica di rimozione potrebbe necessitare di aggiustamenti per ID stabili
+                if req_id_to_remove in st.session_state.analysis_results:
+                    del st.session_state.analysis_results[req_id_to_remove]
+                # Rimuovi anche dalla coda batch se presente
+                st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE] = [
+                    item for item_idx, item in enumerate(st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE])
+                    if item[0] != req_id_to_remove # item è una tupla (req_id, req_text)
+                ]
+                if st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] >= len(st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE]):
+                     st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] = 0 if st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE] else 0
 
 
-    with tab1:
-        st.subheader("Analisi dei Requisiti e Scenari")
-
-        def parse_analisi_requisiti(text):
-            # Lista delle sezioni attese con keyword associate
-            section_keywords = {
-                "contesto": ["contesto", "obiettivo"],
-                "attori": ["attori", "utenti", "coinvolti"],
-                "scenari": ["scenari"],
-                "variabili": ["variabili", "dinamiche"],
-                "flusso": ["flusso di lavoro"]
-            }
-
-            sezioni = {k: "" for k in section_keywords}
-
-            lines = text.strip().split('\n')
-            current_key = None
-
-            for line in lines:
-                line_clean = line.strip().lower()
-
-                # Cerca se la linea è un'intestazione
-                for key, keywords in section_keywords.items():
-                    if any(kw in line_clean for kw in keywords) and len(line_clean) < 80:
-                        current_key = key
-                        break
-                else:
-                    if current_key:
-                        sezioni[current_key] += line.strip() + "\n"
-
-            # Sezione vuota fallback
-            for key in sezioni:
-                if not sezioni[key].strip():
-                    sezioni[key] = "Nessun contenuto trovato"
-
-            return sezioni
-
-        if st.button("Esegui Analista Requisiti"):
-            if not st.session_state.requisito:
-                st.warning("Inserisci un requisito prima di eseguire l'analisi")
-            else:
-                with st.spinner("Analisi in corso..."):
-                    requisito_da_analizzare = st.session_state.results["ValutatoreRequisiti"] or st.session_state.requisito
-                    result = run_analista_requisiti(requisito_da_analizzare, client, model=model_selection)
-                    st.session_state.results["AnalistaRequisiti"] = result
-
-        ar_result = st.session_state.results["AnalistaRequisiti"]
-
-        if ar_result:
-                            sezioni = parse_analisi_requisiti(ar_result)
-                            st.markdown("### 🎯 Contesto Generale")
-                            st.markdown(sezioni["contesto"] or "*Nessun contenuto trovato*")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.markdown("### 👥 Attori Coinvolti")
-                                st.markdown(sezioni["attori"] or "*Nessun contenuto trovato*")
-                            with col2:
-                                st.markdown("### ⚙️ Variabili Dinamiche")
-                                st.markdown(sezioni["variabili"] or "*Nessun contenuto trovato*")
-                            col3, col4 = st.columns(2)
-                            with col3:
-                                st.markdown("### 🎬 Scenari d'Uso")
-                                st.markdown(sezioni["scenari"] or "*Nessun contenuto trovato*")
-                            with col4:
-                                st.markdown("### 🛤️ Flusso di Lavoro")
-                                st.markdown(sezioni["flusso"] or "*Nessun contenuto trovato*")
-
-    # Tab Analista Rischio
-    with tab2:
-        st.subheader("Analisi del Rischio")
-        if st.button("Esegui Analista Rischio"):
-            if not st.session_state.results["AnalistaRequisiti"]:
-                st.warning("Esegui prima l'Analista Requisiti")
-            else:
-                with st.spinner("Analisi del rischio in corso..."):
-                    result = run_analista_rischio(st.session_state.results["AnalistaRequisiti"], client, model=model_selection)
-                    st.session_state.results["AnalistaRischio"] = result
-
-        # Visualizzazione dei risultati
-        if st.session_state.results["AnalistaRischio"]:
-            # Dividi il risultato in linee
-            lines = st.session_state.results["AnalistaRischio"].strip().split('\n')
-            
-            # Estrai l'header (prima linea)
-            headers = [h.strip() for h in lines[1].split('|')]
-            
-            # Estrai i dati (tutte le linee successive) e filtra le righe
-            data = []
-            for line in lines[3:]:  # Salta la prima linea (header) e la seconda (separatore)
-                if line.strip():  # Ignora linee vuote
-                    row = [d.strip().replace(';', ';\n') for d in line.split('|')]
-                    # Verifica se ci sono celle vuote o con "None" nella riga
-                    if not any(not cell or cell.lower() == '```' for cell in row):
-                        data.append(row)
-            
-            # Crea un DataFrame pandas per visualizzazione
-            df = pd.DataFrame(data, columns=headers)
-            
-            # Visualizza la tabella con gli header corretti
-            st.dataframe(df)
-        else:
-            st.info("Esegui l'Analista Rischio per visualizzare i risultati")
-    
-    # Tab Generatore Test
-    with tab3:
-        st.subheader("Generazione Test Case")
-        if st.button("Esegui Generatore Test"):
-            if not st.session_state.results["AnalistaRequisiti"] or not st.session_state.results["AnalistaRischio"]:
-                st.warning("Esegui prima l'Analista Requisiti e l'Analista Rischio")
-            else:
-                with st.spinner("Generazione test case in corso..."):
-                    result = run_generatore_test(
-                        st.session_state.results["AnalistaRequisiti"],
-                        st.session_state.results["AnalistaRischio"],
-                        client,
-                        model=model_selection
-                    )
-                    st.session_state.results["GeneratoreTest"] = result
-
-        # Visualizzazione dei risultati
-        if st.session_state.results["GeneratoreTest"]:
-            # Dividi il risultato in linee
-            lines = st.session_state.results["GeneratoreTest"].strip().split('\n')
-
-            # Estrai l'header (prima linea)
-            headers = [h.strip() for h in lines[1].split('|')]
-
-            # Estrai i dati (tutte le linee successive) e filtra le righe
-            data = []
-            for line in lines[3:]:  # Salta la prima linea (header) e la seconda (separatore)
-                if line.strip():  # Ignora linee vuote
-                    row = [d.strip().replace(';', ';\n') for d in line.split('|')]
-                    # Verifica se ci sono celle vuote o con "None" nella riga
-                    if not any(not cell or cell.lower() == '```' for cell in row):
-                        data.append(row)
-
-            # Crea un DataFrame pandas per visualizzazione
-            df = pd.DataFrame(data, columns=headers)
-
-            # Visualizza la tabella con gli header corretti
-            st.dataframe(df)
-        else:
-            st.info("Esegui il Generatore Test per visualizzare i risultati")
-    
-    # Tab Analizzatore Automazione
-    with tab4:
-        st.subheader("Analisi Automazione")
-        if st.button("Esegui Analizzatore Automazione"):
-            if not st.session_state.results["GeneratoreTest"]:
-                st.warning("Esegui prima il Generatore Test")
-            else:
-                with st.spinner("Analisi automazione in corso..."):
-                    result = run_analizzatore_automazione(st.session_state.results["GeneratoreTest"], client, model=model_selection)
-                    st.session_state.results["AnalizzatoreAutomazione"] = result
-
-        # Visualizzazione dei risultati
-        if st.session_state.results["AnalizzatoreAutomazione"]:
-            # Dividi il risultato in linee
-            lines = st.session_state.results["AnalizzatoreAutomazione"].strip().split('\n')
-            
-            # Estrai l'header (prima linea)
-            headers = [h.strip() for h in lines[1].split('|')]
-            
-            # Estrai i dati (tutte le linee successive) e filtra le righe
-            data = []
-            for line in lines[3:]:  # Salta la prima linea (header) e la seconda (separatore)
-                if line.strip():  # Ignora linee vuote
-                    row = [d.strip().replace(';', ';\n') for d in line.split('|')]
-                    # Verifica se ci sono celle vuote o con "None" nella riga
-                    if not any(not cell or cell.lower() == '```' for cell in row):
-                        data.append(row)
-            
-            # Crea un DataFrame pandas per visualizzazione
-            df = pd.DataFrame(data, columns=headers)
-            
-            # Visualizza la tabella con gli header corretti
-            st.dataframe(df)
-        
-        else:
-            st.info("Esegui l'Analizzatore Automazione per visualizzare i risultati")
-
-    # Modifica anche la parte di visualizzazione nel tab:
-    with tab5:
-        st.subheader("Analisi Performance Test")
-        if st.button("Valuta Performance Test"):
-            if not st.session_state.results.get("AnalistaRequisiti"):
-                st.warning("Esegui prima l'Analista Requisiti")
-            else:
-                with st.spinner("Analisi performance in corso..."):
-                    result = run_analista_performance(
-                        st.session_state.results["AnalistaRequisiti"],
-                        st.session_state.results.get("AnalistaRischio", ""),
-                        client,
-                        model=model_selection
-                    )
-                    st.session_state.results["AnalistaPerformance"] = result
-
-        if st.session_state.results.get("AnalistaPerformance"):
-            try:
-                # Pulizia e preparazione dei dati
-                lines = [line.strip() for line in st.session_state.results["AnalistaPerformance"].split('\n') if line.strip()]
-                
-                # Estrazione delle colonne (prima riga valida dopo eventuali header)
-                header = None
-                data_lines = []
-                
-                for line in lines:
-                    if line.startswith("Necessari?|"):
-                        header = [h.strip() for h in line.split('|')]
-                    elif line.startswith("---|"):
-                        continue
-                    elif header and '|' in line:
-                        data_lines.append([cell.strip() for cell in line.split('|')])
-                
-                if header and data_lines:
-                    # Verifica che tutte le righe abbiano lo stesso numero di colonne dell'header
-                    valid_data = []
-                    for row in data_lines:
-                        if len(row) == len(header):
-                            valid_data.append(row)
-                    
-                    if valid_data:
-                        df = pd.DataFrame(valid_data, columns=header)
-                        st.dataframe(df)
-                    else:
-                        st.error("Formattazione dati non valida. Nessuna riga con il numero corretto di colonne.")
-                        st.text(st.session_state.results["AnalistaPerformance"])
-                else:
-                    st.error("Formato tabella non riconosciuto nell'output.")
-                    st.text(st.session_state.results["AnalistaPerformance"])
-                    
-            except Exception as e:
-                st.error(f"Errore durante l'elaborazione dei risultati: {str(e)}")
-                st.text("Output completo:")
-                st.text(st.session_state.results["AnalistaPerformance"])
-        else:
-            st.info("Esegui l'analisi per valutare i performance test necessari")
-    
-    if st.button("Esegui Analisi Completa"):
-        if not st.session_state.requisito:
-            st.warning("Inserisci un requisito prima di eseguire l'analisi")
-        else:
-            with st.spinner("Analisi completa in corso..."):
-                # Valutatore Requisiti
-                result = run_valutatore_requisiti(st.session_state.requisito, client, model=model_selection)
-                st.session_state.results["ValutatoreRequisiti"] = result
-                
-                # Analista Requisiti
-                requisito_da_analizzare = st.session_state.requisito
-                result = run_analista_requisiti(requisito_da_analizzare, client, model=model_selection)
-                st.session_state.results["AnalistaRequisiti"] = result
-                
-                # Analista Rischio
-                result = run_analista_rischio(st.session_state.results["AnalistaRequisiti"], client, model=model_selection)
-                st.session_state.results["AnalistaRischio"] = result
-                
-                # Generatore Test
-                result = run_generatore_test(
-                    st.session_state.results["AnalistaRequisiti"],
-                    st.session_state.results["AnalistaRischio"],
-                    client,
-                    model=model_selection
-                )
-                st.session_state.results["GeneratoreTest"] = result
-                
-                # Analizzatore Automazione
-                result = run_analizzatore_automazione(st.session_state.results["GeneratoreTest"], client, model=model_selection)
-                st.session_state.results["AnalizzatoreAutomazione"] = result
-                
-                # Analista Performance (NUOVO) 
-                result = run_analista_performance(
-                    st.session_state.results["AnalistaRequisiti"],
-                    st.session_state.results["AnalistaRischio"],
-                    client,
-                    model=model_selection
-                )
-                st.session_state.results["AnalistaPerformance"] = result
-
-                # Forza il refresh della pagina per mostrare i nuovi risultati
                 st.rerun()
-                
-def multiple_requirements_page():
-    # Inizializza lo stato della sessione per i multi-requisiti
-    if 'multi_requirements' not in st.session_state:
-        st.session_state.multi_requirements = [""]
-    
-    if 'multi_results' not in st.session_state:
-        st.session_state.multi_results = {
-            "ValutatoreRequisiti": [],
-            "AnalistaRequisiti": [],
-            "AnalistaRischio": [],
-            "GeneratoreTest": [],
-            "AnalizzatoreAutomazione": [],
-            "AnalistaPerformance": []
-        }
-    
-    # Client Google AI
-    client = get_genai_client()
-    
-    # Sidebar per i controlli
-    with st.sidebar:
-        st.header("Controlli")
-        model_selection = st.selectbox(
-            "Seleziona modello:",
-            ["gemini-2.0-flash-001", "gemini-2.0-pro-001"],
-            index=0,
-            key="multi_model"
-        )
-        if st.button("Pulisci Tutto", key="multi_clear"):
-            st.session_state.multi_requirements = [""]
-            st.session_state.multi_results = {
-                "ValutatoreRequisiti": [],
-                "AnalistaRequisiti": [],
-                "AnalistaRischio": [],
-                "GeneratoreTest": [],
-                "AnalizzatoreAutomazione": [],
-                "AnalistaPerformance": []
-            }
+                return
+
+    if st.button("➕ Aggiungi Campo Requisito", key="add_multi_req_field"):
+        st.session_state[SESSION_KEY_MULTI_REQS_LIST].append("")
+        st.rerun()
+
+    st.markdown("---")
+    col_run_multi, col_clear_multi = st.columns(2)
+    with col_run_multi:
+        if st.button("🚀 Esegui Analisi per Tutti i Requisiti (Multi)", key="run_all_multi_page", type="primary", use_container_width=True, disabled=bool(st.session_state.get(SESSION_KEY_MULTI_BATCH_QUEUE))):
+            valid_reqs_to_process = [
+                (f"{MULTI_REQ_ID_PREFIX}{i}", req_text)
+                for i, req_text in enumerate(st.session_state[SESSION_KEY_MULTI_REQS_LIST])
+                if req_text.strip()
+            ]
+            if not valid_reqs_to_process:
+                st.warning("Inserisci almeno un requisito valido prima di eseguire l'analisi.")
+            else:
+                st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE] = valid_reqs_to_process
+                st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] = 0
+                st.rerun() # Avvia l'elaborazione della coda
+    with col_clear_multi:
+        if st.button("🧹 Pulisci Tutti i Requisiti e Risultati (Multi)", key="clear_multi_page_all", use_container_width=True):
+            st.session_state[SESSION_KEY_MULTI_REQS_LIST] = [""]
+            keys_to_delete = [k for k in st.session_state.analysis_results if k.startswith(MULTI_REQ_ID_PREFIX)]
+            for k_del in keys_to_delete:
+                del st.session_state.analysis_results[k_del]
+            st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE] = []
+            st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] = 0
             st.rerun()
-    
-    # Area input multi-requisiti
-    st.subheader("Inserisci i Requisiti")
-    
-    # Funzione per aggiungere un nuovo campo di input
-    def add_requirement():
-        st.session_state.multi_requirements.append("")
-    
-    # Funzione per rimuovere un campo di input
-    def remove_requirement(index):
-        if len(st.session_state.multi_requirements) > 1:
-            st.session_state.multi_requirements.pop(index)
-    
-    # Mostra i campi di input esistenti
-    for i, req in enumerate(st.session_state.multi_requirements):
-        cols = st.columns([10, 1])
-        with cols[0]:
-            st.text_area(
-                f"Requisito {i+1}", 
-                value=req, 
-                key=f"multi_req_{i}",
-                height=80,
-                on_change=lambda i=i: update_requirement(i),
-                args=(i,))
-        with cols[1]:
-            st.button("❌", key=f"remove_{i}", on_click=remove_requirement, args=(i,))
-    
-    # Pulsante per aggiungere un nuovo requisito
-    st.button("➕ Aggiungi Requisito", on_click=add_requirement)
-    
-    # Funzione per aggiornare un requisito
-    def update_requirement(index):
-        st.session_state.multi_requirements[index] = st.session_state[f"multi_req_{index}"]
-    
-    # Pulsante per eseguire l'analisi completa
-    if st.button("Esegui Analisi Completa per Tutti i Requisiti"):
-        if not any(st.session_state.multi_requirements):
-            st.warning("Inserisci almeno un requisito prima di eseguire l'analisi")
+
+    # Logica di elaborazione batch per requisiti multipli
+    if st.session_state.get(SESSION_KEY_MULTI_BATCH_QUEUE):
+        batch_queue = st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE]
+        idx = st.session_state.get(SESSION_KEY_MULTI_BATCH_INDEX, 0)
+
+        if idx < len(batch_queue):
+            req_id_multi, req_text_multi = batch_queue[idx]
+
+            # Mostra uno spinner per l'elemento corrente
+            with st.spinner(f"Elaborazione requisito '{req_id_multi}' ({idx + 1}/{len(batch_queue)})..."):
+                run_full_analysis_pipeline(req_id_multi, req_text_multi, client_gemini, global_model_selection)
+
+            st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] += 1
+            st.rerun() # Passa all'elemento successivo o rifletti lo stato
         else:
-            with st.spinner("Analisi completa in corso per tutti i requisiti..."):
-                # Reset dei risultati precedenti
-                st.session_state.multi_results = {
-                    "ValutatoreRequisiti": [],
-                    "AnalistaRequisiti": [],
-                    "AnalistaRischio": [],
-                    "GeneratoreTest": [],
-                    "AnalizzatoreAutomazione": [],
-                    "AnalistaPerformance": []
-                }
-                
-                # Esegui l'analisi per ogni requisito
-                for req in st.session_state.multi_requirements:
-                    if req.strip():  # Solo se il requisito non è vuoto
-                        # Valutatore Requisiti
-                        vr_result = run_valutatore_requisiti(req, client, model=model_selection)
-                        st.session_state.multi_results["ValutatoreRequisiti"].append(vr_result)
-                        
-                        # Analista Requisiti
-                        ar_result = run_analista_requisiti(req, client, model=model_selection)
-                        st.session_state.multi_results["AnalistaRequisiti"].append(ar_result)
-                        
-                        # Analista Rischio
-                        risco_result = run_analista_rischio(ar_result, client, model=model_selection)
-                        st.session_state.multi_results["AnalistaRischio"].append(risco_result)
-                        
-                        # Generatore Test
-                        gt_result = run_generatore_test(ar_result, risco_result, client, model=model_selection)
-                        st.session_state.multi_results["GeneratoreTest"].append(gt_result)
-                        
-                        # Analizzatore Automazione
-                        aa_result = run_analizzatore_automazione(gt_result, client, model=model_selection)
-                        st.session_state.multi_results["AnalizzatoreAutomazione"].append(aa_result)
-                        
-                        # Analista Performance
-                        ap_result = run_analista_performance(ar_result, risco_result, client, model=model_selection)
-                        st.session_state.multi_results["AnalistaPerformance"].append(ap_result)
-                
-                st.rerun()
-    
-    # Mostra i risultati aggregati
-    if any(st.session_state.multi_results["ValutatoreRequisiti"]):
-        st.subheader("Risultati Aggregati")
-        
-        # Tab per navigare tra i diversi tipi di risultati
-        tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "Valutatore Requisiti", 
-            "Analista Requisiti", 
-            "Analista Rischio", 
-            "Generatore Test", 
-            "Analizzatore Automazione",
-            "Performance Test"
-        ])
-        
-        with tab0:
-            st.subheader("Valutazioni Requisiti Aggregati")
-            for i, (req, res) in enumerate(zip(st.session_state.multi_requirements, st.session_state.multi_results["ValutatoreRequisiti"])):
-                if req.strip():
-                    with st.expander(f"Requisito {i+1}: {req[:50]}..."):
-                        # Copia e incolla la logica di visualizzazione dalla single_requirement_page
-                        # Adatta le key degli elementi di sessione se necessario (es. aggiungi un prefisso)
+            st.success("Tutti i requisiti multipli sono stati elaborati.")
+            st.session_state[SESSION_KEY_MULTI_BATCH_QUEUE] = []
+            st.session_state[SESSION_KEY_MULTI_BATCH_INDEX] = 0
+            st.rerun() # Rerun finale per pulire e mostrare il messaggio di successo
 
-                        # Funzione per estrarre sezioni (come nella single_requirement_page)
-                        def extract_section(content, section_title):
-                            start_idx = content.find(f"### {section_title}:")
-                            if start_idx == -1:
-                                return ""
-                            start_idx += len(f"### {section_title}:") + 1
-                            end_idx = content.find("### ", start_idx)
-                            if end_idx == -1:
-                                return content[start_idx:].strip()
-                            return content[start_idx:end_idx].strip()
-
-                        # Estrai le sezioni
-                        completezza = extract_section(res, "Valutazione Completezza")
-                        presenti = extract_section(res, "Elementi Presenti")
-                        mancanti = extract_section(res, "Elementi Mancanti")
-                        migliorato = extract_section(res, "Requisito Migliorato")
-                        note = extract_section(res, "Note")
-
-                        # 1. Valutazione di completezza con indicatore visivo
-                        st.markdown("### 📊 Valutazione Completezza")
-                        if completezza:
-                            if "incompleto" not in completezza.lower() and "parzialmente" not in completezza.lower():
-                                st.success(f"✅ {completezza}")
-                            elif "parzialmente" in completezza.lower():
-                                st.warning(f"⚠️ {completezza}")
-                            else:
-                                st.error(f"❌ {completezza}")
-                        else:
-                            st.info("Nessuna valutazione di completezza disponibile")
-
-                        # 2. Layout a colonne per elementi presenti/mancanti
-                        st.markdown("### 🔍 Elementi Identificati")
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.markdown("#### ✅ Presenti")
-                            if presenti:
-                                present_items = [item.strip()[2:] for item in presenti.split('\n') if item.startswith("- ")]
-                                if present_items:
-                                    for item in present_items:
-                                        st.markdown(f"""
-                                        <div class='element-box dark-mode-present'>
-                                        <strong>✓ {item}</strong>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                else:
-                                    st.info("Nessun elemento presente identificato")
-                            else:
-                                st.info("Nessuna informazione sugli elementi presenti")
-
-                        with col2:
-                            st.markdown("#### ❌ Mancanti")
-                            if mancanti:
-                                missing_items = [item.strip()[2:] for item in mancanti.split('\n') if item.startswith("- ")]
-                                if missing_items:
-                                    for item in missing_items:
-                                        st.markdown(f"""
-                                        <div class='element-box dark-mode-missing'>
-                                        <strong>✗ {item}</strong>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                else:
-                                    st.success("Tutti gli elementi necessari sono presenti!")
-                            else:
-                                st.info("Nessuna informazione sugli elementi mancanti")
-
-                        # 3. Requisito migliorato (sotto gli elementi mancanti)
-                        if migliorato:
-                            st.markdown("### ✨ Requisito Migliorato")
-                            st.markdown(f"""
-                            <div class='element-box improved-box dark-mode-improved'>
-                            <strong>{migliorato}</strong>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.info("Nessuna versione migliorata del requisito disponibile")
-
-                        # 4. Note aggiuntive (alla fine)
-                        if note:
-                            st.markdown("### 📝 Note Aggiuntive")
-                            st.markdown(f"""
-                            <div class='element-box dark-mode-notes'>
-                            <strong>{note}</strong>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-
-        with tab1:
-            st.subheader("Analisi Requisiti Aggregate")
-            for i, (req, res) in enumerate(zip(st.session_state.multi_requirements, st.session_state.multi_results["AnalistaRequisiti"])):
-                if req.strip():
-                    with st.expander(f"Analisi Requisito {i+1}: {req[:50]}..."):
-                        # Copia e incolla la logica di visualizzazione dalla single_requirement_page per l'AnalistaRequisiti
-                        # Adatta le key degli elementi di sessione se necessario
-                        def parse_analisi_requisiti(text):
-                            # Lista delle sezioni attese con keyword associate
-                            section_keywords = {
-                                "contesto": ["contesto", "obiettivo"],
-                                "attori": ["attori", "utenti", "coinvolti"],
-                                "scenari": ["scenari"],
-                                "variabili": ["variabili", "dinamiche"],
-                                "flusso": ["flusso di lavoro"]
-                            }
-
-                            sezioni = {k: "" for k in section_keywords}
-
-                            lines = text.strip().split('\n')
-                            current_key = None
-
-                            for line in lines:
-                                line_clean = line.strip().lower()
-
-                                # Cerca se la linea è un'intestazione
-                                for key, keywords in section_keywords.items():
-                                    if any(kw in line_clean for kw in keywords) and len(line_clean) < 80:
-                                        current_key = key
-                                        break
-                                else:
-                                    if current_key:
-                                        sezioni[current_key] += line.strip() + "\n"
-
-                            # Sezione vuota fallback
-                            for key in sezioni:
-                                if not sezioni[key].strip():
-                                    sezioni[key] = "Nessun contenuto trovato"
-
-                            return sezioni
-
-                        sezioni = parse_analisi_requisiti(res)
-                        st.markdown("### 🎯 Contesto Generale")
-                        st.markdown(sezioni["contesto"] or "*Nessun contenuto trovato*")
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.markdown("### 👥 Attori Coinvolti")
-                            st.markdown(sezioni["attori"] or "*Nessun contenuto trovato*")
-
-                        with col2:
-                            st.markdown("### 🔀 Variabili Dinamiche")
-                            st.markdown(sezioni["variabili"] or "*Nessun contenuto trovato*")
-
-                        col3, col4 = st.columns(2)
-
-                        with col3:
-                            st.markdown("### 📜 Scenari")
-                            st.markdown(sezioni["scenari"] or "*Nessun contenuto trovato*")
-
-                        with col4:
-                            st.markdown("### 🔄 Flusso di Lavoro")
-                            st.markdown(sezioni["flusso"] or "*Nessun contenuto trovato*")
-
-                        # Mostra l'output completo direttamente (senza un altro expander)
-                        st.subheader("🔍 Output Completo")
-                        st.text_area("Output completo:", value=res, height=400, key=f"ar_result_full_{i}") # Usa una key univoca
-
-        with tab2:
-                    st.subheader("Analisi Rischio Aggregate")
-                    for i, (req, res) in enumerate(zip(st.session_state.multi_requirements, st.session_state.multi_results["AnalistaRischio"])):
-                        if req.strip():
-                            with st.expander(f"Rischi Requisito {i+1}: {req[:50]}..."):
-                                # Copia e incolla la logica di visualizzazione della tabella dalla single_requirement_page per AnalistaRischio
-                                # Adatta le key degli elementi di sessione
-                                # Visualizzazione dei risultati
-                                if res:
-                                    # Dividi il risultato in linee
-                                    lines = res.strip().split('\n')
-
-                                    # Estrai l'header (prima linea)
-                                    headers = [h.strip() for h in lines[1].split('|')]
-
-                                    # Estrai i dati (tutte le linee successive) e filtra le righe
-                                    data = []
-                                    for line in lines[3:]:  # Salta la prima linea (header) e la seconda (separatore)
-                                        if line.strip():  # Ignora linee vuote
-                                            row = [d.strip().replace(';', ';\n') for d in line.split('|')]
-                                            # Verifica se ci sono celle vuote o con "None" nella riga
-                                            if not any(not cell or cell.lower() == '```' for cell in row):
-                                                data.append(row)
-
-                                    # Crea un DataFrame pandas per visualizzazione
-                                    df = pd.DataFrame(data, columns=headers)
-
-                                    # Visualizza la tabella con gli header corretti
-                                    st.dataframe(df)
-
-                                else:
-                                    st.info("Esegui l'Analista Rischio per visualizzare i risultati")
-
-        with tab3:
-            st.subheader("Test Case Generati")
-            for i, (req, res) in enumerate(zip(st.session_state.multi_requirements, st.session_state.multi_results["GeneratoreTest"])):
-                if req.strip():
-                    with st.expander(f"Test Requisito {i+1}: {req[:50]}..."):
-                        # Copia e incolla la logica di visualizzazione della tabella dalla single_requirement_page per GeneratoreTest
-                        # Adatta le key degli elementi di sessione
-                        # Visualizzazione dei risultati
-                        if res:
-                            # Dividi il risultato in linee
-                            lines = res.strip().split('\n')
-
-                            # Estrai l'header (prima linea)
-                            headers = [h.strip() for h in lines[1].split('|')]
-
-                            # Estrai i dati (tutte le linee successive) e filtra le righe
-                            data = []
-                            for line in lines[3:]:  # Salta la prima linea (header) e la seconda (separatore)
-                                if line.strip():  # Ignora linee vuote
-                                    row = [d.strip().replace(';', ';\n') for d in line.split('|')]
-                                    # Verifica se ci sono celle vuote o con "None" nella riga
-                                    if not any(not cell or cell.lower() == '```' for cell in row):
-                                        data.append(row)
-
-                            # Crea un DataFrame pandas per visualizzazione
-                            df = pd.DataFrame(data, columns=headers)
-
-                            # Visualizza la tabella con gli header corretti
-                            st.dataframe(df)
-                        else:
-                            st.info("Esegui il Generatore Test per visualizzare i risultati")
-
-        with tab4:
-            st.subheader("Analisi Automazione")
-            for i, (req, res) in enumerate(zip(st.session_state.multi_requirements, st.session_state.multi_results["AnalizzatoreAutomazione"])):
-                if req.strip():
-                    with st.expander(f"Automazione Requisito {i+1}: {req[:50]}..."):
-                        # Copia e incolla la logica di visualizzazione della tabella dalla single_requirement_page per AnalizzatoreAutomazione
-                        # Adatta le key degli elementi di sessione
-                        # Visualizzazione dei risultati
-                        if res:
-                            # Dividi il risultato in linee
-                            lines = res.strip().split('\n')
-
-                            # Estrai l'header (prima linea)
-                            headers = [h.strip() for h in lines[1].split('|')]
-
-                            # Estrai i dati (tutte le linee successive) e filtra le righe
-                            data = []
-                            for line in lines[3:]:  # Salta la prima linea (header) e la seconda (separatore)
-                                if line.strip():  # Ignora linee vuote
-                                    row = [d.strip().replace(';', ';\n') for d in line.split('|')]
-                                    # Verifica se ci sono celle vuote o con "None" nella riga
-                                    if not any(not cell or cell.lower() == '```' for cell in row):
-                                        data.append(row)
-
-                            # Crea un DataFrame pandas per visualizzazione
-                            df = pd.DataFrame(data, columns=headers)
-
-                            # Visualizza la tabella con gli header corretti
-                            st.dataframe(df)
-
-                        else:
-                            st.info("Esegui l'Analizzatore Automazione per visualizzare i risultati")
-
-        with tab5:
-            st.subheader("Analisi Performance")
-            for i, (req, res) in enumerate(zip(st.session_state.multi_requirements, st.session_state.multi_results["AnalistaPerformance"])):
-                if req.strip():
-                    with st.expander(f"Performance Requisito {i+1}: {req[:50]}..."):
-                        # Copia e incolla la logica di visualizzazione della tabella dalla single_requirement_page per AnalistaPerformance
-                        # Adatta le key degli elementi di sessione
-                        if res:
-                            try:
-                                # Pulizia e preparazione dei dati
-                                lines = [line.strip() for line in res.split('\n') if line.strip()]
-
-                                # Estrazione delle colonne (prima riga valida dopo eventuali header)
-                                header = None
-                                data_lines = []
-
-                                for line in lines:
-                                    if line.startswith("Necessari?|"):
-                                        header = [h.strip() for h in line.split('|')]
-                                    elif line.startswith("---|"):
-                                        continue
-                                    elif header and '|' in line:
-                                        data_lines.append([cell.strip() for cell in line.split('|')])
-
-                                if header and data_lines:
-                                    # Verifica che tutte le righe abbiano lo stesso numero di colonne dell'header
-                                    valid_data = []
-                                    for row in data_lines:
-                                        if len(row) == len(header):
-                                            valid_data.append(row)
-
-                                    if valid_data:
-                                        df = pd.DataFrame(valid_data, columns=header)
-                                        st.dataframe(df)
-                                    else:
-                                        st.error("Formattazione dati non valida. Nessuna riga con il numero corretto di colonne.")
-                                        st.text(res)
-                                else:
-                                    st.error("Formato tabella non riconosciuto nell'output.")
-                                    st.text(res)
-
-                            except Exception as e:
-                                st.error(f"Errore durante l'elaborazione dei risultati: {str(e)}")
-                                st.text(res)
-                        else:
-                            st.info("Esegui l'analisi per valutare i performance test necessari")
+    st.markdown("---")
+    st.subheader("Risultati Analisi per Requisito")
+    for i, req_text_display in enumerate(st.session_state[SESSION_KEY_MULTI_REQS_LIST]):
+        req_id_multi_display = f"{MULTI_REQ_ID_PREFIX}{i}"
+        if req_text_display.strip() or (req_id_multi_display in st.session_state.analysis_results and st.session_state.analysis_results[req_id_multi_display]):
+            with st.expander(f"Dettagli Analisi per Requisito {i+1}: {req_text_display[:60]}...", expanded=True):
+                if not req_text_display.strip() and (req_id_multi_display not in st.session_state.analysis_results or not st.session_state.analysis_results[req_id_multi_display]):
+                    st.caption(f"Requisito {i+1} è vuoto.")
+                elif req_id_multi_display in st.session_state.analysis_results and st.session_state.analysis_results[req_id_multi_display]:
+                    render_unified_analysis_tabs(req_id_multi_display, req_text_display, client_gemini, global_model_selection)
+                else:
+                    st.info(f"Nessuna analisi eseguita per Requisito {i+1}. Premi 'Esegui Analisi per Tutti'.")
 
 
 def main():
-    st.markdown(
-        """
-        <style>
-            div[role="radiogroup"] > label {
-                display: inline-flex;
-                align-items: center;
-                margin-right: 10px;
-            }
-            .block-container {
-                padding-top: 0 !important;
-            }
-            .stAppHeader {
-                display: none}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    page = st.radio(
-        "Seleziona modalità:",
-        ["Requisito", "Multi-Requisiti", "Jira Story"],
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-
     st.title("🤖 (TEST)INA")
 
-    if page == "Requisito":
-        single_requirement_page()
-    elif page == "Multi-Requisiti":
-        multiple_requirements_page()
-    elif page == "Jira Story":
-        jira_integration_page()
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = {}
 
+    client_gemini = get_genai_client()
+    if not client_gemini:
+        st.error("Client Gemini non inizializzato. Controlla la chiave API e la configurazione.")
+        return # Stop execution if client is not available
+
+    # Selezione del modello globale nella Sidebar
+    st.sidebar.title("Configurazione Globale")
+    global_model_selection = st.sidebar.selectbox(
+        "Seleziona Modello Gemini (Globale):",
+        options=["gemini-2.0-flash-001", "gemini-1.5-flash-latest"], # Add more models
+        index=0, # Default to flash
+        key="global_model_selector"
+    )
+
+
+    page_options = {
+        "📝 Requisito Singolo": lambda: single_requirement_page_refactored(client_gemini, global_model_selection),
+        "📄 Requisiti Multipli": lambda: multiple_requirements_page_refactored(client_gemini, global_model_selection),
+        "🔗 Integrazione Jira": lambda: jira_integration_page_refactored(client_gemini, global_model_selection)
+    }
+        
+    # Selezione modalità via Sidebar
+    st.sidebar.markdown("---")
+    selected_page_name = st.sidebar.radio("Modalità Operativa:", list(page_options.keys()), label_visibility="visible")
+
+
+    # Mostra la pagina selezionata
+    page_to_render_func = page_options[selected_page_name]
+    page_to_render_func()
 
 if __name__ == "__main__":
     main()
