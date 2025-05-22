@@ -702,7 +702,7 @@ def run_analista_gestionale(test_cases, client_gemini, model=global_model_select
     Il tuo compito è stimare l'effort necessario per eseguire manualmente i test case forniti, considerando una call Teams tra tester e business per la review e l'esecuzione.
 
     Linee guida per la stima (per ogni test case):
-    1. **Analisi Test Case e Setup Iniziale**: 10 minuti base per test case (comprensione, preparazione dati/ambiente se minimi).
+    1. **Analisi Test Case e Setup Iniziale**: 2 minuti base per test case (comprensione, preparazione dati/ambiente se minimi).
     2. **Esecuzione Passi**:
         - Step Semplice (es. click, input testo semplice, verifica UI elementare): 2-3 minuti per step.
         - Step Medio (es. compilazione form con più campi, navigazione tra poche pagine, verifica dati semplice): 4-6 minuti per step.
