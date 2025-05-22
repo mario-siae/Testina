@@ -1117,8 +1117,9 @@ def jira_integration_page_refactored(client_gemini, global_model_selection):
                 del st.session_state.jira_selected_issue_map[issue_key]
 
             with col.expander("Dettagli Brevi"):
+                st.markdown(f"**Stato:** {issue_data['fields']['status']['name']}")
                 desc = issue_data['fields']['description']
-                st.markdown(f"**Descrizione:** {desc[:300]}..." if desc else "Nessuna descrizione.")
+                st.markdown(f"**Descrizione:** {desc[:100]}..." if desc else "Nessuna descrizione.")
 
         # Inizializza coda batch se non esiste
         if 'jira_batch_queue' not in st.session_state:
@@ -1136,7 +1137,7 @@ def jira_integration_page_refactored(client_gemini, global_model_selection):
             st.rerun()
 
         # Pulsante per pulizia
-        if st.sidebar.button("🧹 Svuota Risultati", key="clear_selected_jira_results", disabled=not st.session_state.jira_selected_issue_map):
+        if st.sidebar.button("🧹 Pulisci Risultati Jira Selezionati", key="clear_selected_jira_results", disabled=not st.session_state.jira_selected_issue_map):
             for issue_k in list(st.session_state.jira_selected_issue_map.keys()):
                 req_id = f"jira_issue_{issue_k}"
                 if req_id in st.session_state.analysis_results:
@@ -1148,7 +1149,7 @@ def jira_integration_page_refactored(client_gemini, global_model_selection):
             st.markdown("---")
             st.subheader("Risultati Analisi per Issue Selezionate")
         for issue_k, issue_data in st.session_state.jira_selected_issue_map.items():
-            req_id = f"{issue_k}"
+            req_id = f"jira_issue_{issue_k}"
             if req_id in st.session_state.analysis_results and st.session_state.analysis_results[req_id]:
                 with st.expander(f"Analisi per {issue_k} - {issue_data['fields']['summary']}", expanded=True):
                     description = issue_data['fields'].get('description', "")
@@ -1167,7 +1168,7 @@ def jira_integration_page_refactored(client_gemini, global_model_selection):
             req_id, desc = jira_queue[idx]
 
             # Mostra uno spinner per l'elemento corrente
-            with st.spinner(f"Elaborazione '{req_id}' ({idx + 1}/{len(jira_queue)})..."):
+            with st.spinner(f"Elaborazione issue Jira '{req_id}' ({idx + 1}/{len(jira_queue)})..."):
                 run_full_analysis_pipeline(req_id, desc, client_gemini, global_model_selection)
 
             st.session_state.jira_batch_index += 1
