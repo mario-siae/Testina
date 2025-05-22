@@ -1,6 +1,6 @@
 streamlit
 python-dotenv
-google-genai
+google.generativeai
 requests
 atlassian-python-api
 pandas
